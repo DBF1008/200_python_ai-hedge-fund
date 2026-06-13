@@ -14,6 +14,7 @@ from src.tools.api import (
 )
 from app.backend.services.graph import run_graph_async, parse_hedge_fund_response
 from app.backend.services.portfolio import create_portfolio
+from src.utils.progress import set_current_run_id
 
 class BacktestService:
     """
@@ -32,10 +33,11 @@ class BacktestService:
         model_name: str = "gpt-4.1",
         model_provider: str = "OpenAI",
         request: dict = {},
+        run_id: Optional[str] = None,
     ):
         """
         Initialize the backtest service.
-        
+
         :param graph: Pre-compiled LangGraph graph for trading decisions.
         :param portfolio: Initial portfolio state.
         :param tickers: List of tickers to backtest.
@@ -45,6 +47,7 @@ class BacktestService:
         :param model_name: Which LLM model name to use.
         :param model_provider: Which LLM provider.
         :param request: Request object containing API keys and other metadata.
+        :param run_id: Unique run identifier for progress isolation.
         """
         self.graph = graph
         self.portfolio = portfolio
@@ -55,6 +58,7 @@ class BacktestService:
         self.model_name = model_name
         self.model_provider = model_provider
         self.request = request
+        self.run_id = run_id
         self.portfolio_values = []
 
     def execute_trade(self, ticker: str, action: str, quantity: float, current_price: float) -> int:
@@ -287,6 +291,11 @@ class BacktestService:
         Run the backtest asynchronously with optional progress callbacks.
         Uses the pre-compiled graph for trading decisions.
         """
+        # Ensure the run_id ContextVar is set in this async context so that
+        # progress_handler callbacks registered by the SSE endpoint receive
+        # updates from this backtest only.
+        token = set_current_run_id(self.run_id) if self.run_id else None
+
         # Pre-fetch all data at the start
         self.prefetch_data()
 
@@ -373,6 +382,7 @@ class BacktestService:
                     model_name=self.model_name,
                     model_provider=self.model_provider,
                     request=self.request,
+                    run_id=self.run_id,
                 )
                 
                 # Parse the decisions from the graph result

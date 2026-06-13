@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import json
 import re
 from langchain_core.messages import HumanMessage
@@ -129,12 +130,34 @@ def create_graph(graph_nodes: list, graph_edges: list) -> StateGraph:
     return graph
 
 
-async def run_graph_async(graph, portfolio, tickers, start_date, end_date, model_name, model_provider, request=None):
-    """Async wrapper for run_graph to work with asyncio."""
-    # Use run_in_executor to run the synchronous function in a separate thread
-    # so it doesn't block the event loop
+async def run_graph_async(graph, portfolio, tickers, start_date, end_date, model_name, model_provider, request=None, run_id=None):
+    """Async wrapper for run_graph to work with asyncio.
+
+    Propagates the current ``contextvars`` context (including the
+    ``current_run_id`` ContextVar) into the thread-pool worker so that
+    progress updates emitted by agents are routed to the correct per-run
+    tracker.
+    """
     loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(None, lambda: run_graph(graph, portfolio, tickers, start_date, end_date, model_name, model_provider, request))  # Use default executor
+    # Copy the current context so that ContextVars set in the async
+    # endpoint (e.g. ``current_run_id``) are visible inside the
+    # synchronous ``run_graph`` call that executes on a thread-pool worker.
+    ctx = contextvars.copy_context()
+    result = await loop.run_in_executor(
+        None,
+        lambda: ctx.run(
+            run_graph,
+            graph,
+            portfolio,
+            tickers,
+            start_date,
+            end_date,
+            model_name,
+            model_provider,
+            request,
+            run_id,
+        ),
+    )
     return result
 
 
@@ -147,34 +170,51 @@ def run_graph(
     model_name: str,
     model_provider: str,
     request=None,
+    run_id=None,
 ) -> dict:
     """
     Run the graph with the given portfolio, tickers,
     start date, end date, show reasoning, model name,
     and model provider.
     """
-    return graph.invoke(
-        {
-            "messages": [
-                HumanMessage(
-                    content="Make trading decisions based on the provided data.",
-                )
-            ],
-            "data": {
-                "tickers": tickers,
-                "portfolio": portfolio,
-                "start_date": start_date,
-                "end_date": end_date,
-                "analyst_signals": {},
+    # Ensure run_id is present in metadata so that agent wrappers
+    # (``create_agent_function``) can propagate it into the progress
+    # tracking ContextVar before each agent executes.
+    metadata = {
+        "show_reasoning": False,
+        "model_name": model_name,
+        "model_provider": model_provider,
+        "request": request,  # Pass the request for agent-specific model access
+    }
+    if run_id is not None:
+        metadata["run_id"] = run_id
+
+    # Also set the ContextVar in this thread so that any synchronous
+    # progress.update_status calls made outside of agent wrappers still
+    # route correctly.
+    from src.utils.progress import set_current_run_id
+    token = set_current_run_id(run_id)
+    try:
+        return graph.invoke(
+            {
+                "messages": [
+                    HumanMessage(
+                        content="Make trading decisions based on the provided data.",
+                    )
+                ],
+                "data": {
+                    "tickers": tickers,
+                    "portfolio": portfolio,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "analyst_signals": {},
+                },
+                "metadata": metadata,
             },
-            "metadata": {
-                "show_reasoning": False,
-                "model_name": model_name,
-                "model_provider": model_provider,
-                "request": request,  # Pass the request for agent-specific model access
-            },
-        },
-    )
+        )
+    finally:
+        from src.utils.progress import _current_run_id
+        _current_run_id.reset(token)
 
 
 def parse_hedge_fund_response(response):

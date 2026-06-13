@@ -10,7 +10,7 @@ from app.backend.services.graph import create_graph, parse_hedge_fund_response, 
 from app.backend.services.portfolio import create_portfolio
 from app.backend.services.backtest_service import BacktestService
 from app.backend.services.api_key_service import ApiKeyService
-from src.utils.progress import progress
+from src.utils.progress import progress, generate_run_id, set_current_run_id
 from src.utils.analysts import get_agents_list
 
 router = APIRouter(prefix="/hedge-fund")
@@ -39,6 +39,13 @@ async def run(request_data: HedgeFundRequest, request: Request, db: Session = De
             graph_edges=request_data.graph_edges
         )
         graph = graph.compile()
+
+        # Generate a unique run_id for progress isolation and set it in the
+        # current context so that handlers registered below only receive
+        # events from this run.
+        run_id = generate_run_id()
+        set_current_run_id(run_id)
+        tracker = progress.create_tracker(run_id)
 
         # Log a test progress update for debugging
         progress.update_status("system", None, "Preparing hedge fund run")
@@ -71,8 +78,9 @@ async def run(request_data: HedgeFundRequest, request: Request, db: Session = De
                 event = ProgressUpdateEvent(agent=agent_name, ticker=ticker, status=status, timestamp=timestamp, analysis=analysis)
                 progress_queue.put_nowait(event)
 
-            # Register our handler with the progress tracker
-            progress.register_handler(progress_handler)
+            # Register our handler with the per-run tracker (not the global
+            # progress object) so that only events from this run are received.
+            tracker.register_handler(progress_handler)
 
             try:
                 # Start the graph execution in a background task
@@ -86,12 +94,13 @@ async def run(request_data: HedgeFundRequest, request: Request, db: Session = De
                         model_name=request_data.model_name,
                         model_provider=model_provider,
                         request=request_data,  # Pass the full request for agent-specific model access
+                        run_id=run_id,
                     )
                 )
-                
+
                 # Start the disconnect detection task
                 disconnect_task = asyncio.create_task(wait_for_disconnect())
-                
+
                 # Send initial message
                 yield StartEvent().to_sse()
 
@@ -140,8 +149,9 @@ async def run(request_data: HedgeFundRequest, request: Request, db: Session = De
                 print("Event generator cancelled")
                 return
             finally:
-                # Clean up
-                progress.unregister_handler(progress_handler)
+                # Clean up: unregister handler and remove the per-run tracker
+                tracker.unregister_handler(progress_handler)
+                progress.remove_tracker(run_id)
                 if run_task and not run_task.done():
                     run_task.cancel()
                     try:
@@ -182,15 +192,20 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
 
         # Create the portfolio (same as /run endpoint)
         portfolio = create_portfolio(
-            request_data.initial_capital, 
-            request_data.margin_requirement, 
-            request_data.tickers, 
+            request_data.initial_capital,
+            request_data.margin_requirement,
+            request_data.tickers,
             request_data.portfolio_positions
         )
 
         # Construct agent graph using the React Flow graph structure (same as /run endpoint)
         graph = create_graph(graph_nodes=request_data.graph_nodes, graph_edges=request_data.graph_edges)
         graph = graph.compile()
+
+        # Generate a unique run_id for progress isolation
+        run_id = generate_run_id()
+        set_current_run_id(run_id)
+        tracker = progress.create_tracker(run_id)
 
         # Create backtest service with the compiled graph
         backtest_service = BacktestService(
@@ -203,6 +218,7 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
             model_name=request_data.model_name,
             model_provider=model_provider,
             request=request_data,  # Pass the full request for agent-specific model access
+            run_id=run_id,
         )
 
         # Function to detect client disconnection
@@ -222,7 +238,9 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
             backtest_task = None
             disconnect_task = None
 
-            # Global progress handler to capture individual agent updates during backtest
+            # Handler to capture individual agent updates during backtest.
+            # Registered on the per-run tracker so it only receives events
+            # from this backtest.
             def progress_handler(agent_name, ticker, status, analysis, timestamp):
                 event = ProgressUpdateEvent(agent=agent_name, ticker=ticker, status=status, timestamp=timestamp, analysis=analysis)
                 progress_queue.put_nowait(event)
@@ -241,11 +259,11 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
                 elif update["type"] == "backtest_result":
                     # Convert day result to a streaming event
                     backtest_result = BacktestDayResult(**update["data"])
-                    
+
                     # Send the full day result data as JSON in the analysis field
                     import json
                     analysis_data = json.dumps(update["data"])
-                    
+
                     event = ProgressUpdateEvent(
                         agent="backtest",
                         ticker=None,
@@ -255,18 +273,18 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
                     )
                     progress_queue.put_nowait(event)
 
-            # Register our handler with the progress tracker to capture agent updates
-            progress.register_handler(progress_handler)
-            
+            # Register our handler with the per-run tracker
+            tracker.register_handler(progress_handler)
+
             try:
                 # Start the backtest in a background task
                 backtest_task = asyncio.create_task(
                     backtest_service.run_backtest_async(progress_callback=progress_callback)
                 )
-                
+
                 # Start the disconnect detection task
                 disconnect_task = asyncio.create_task(wait_for_disconnect())
-                
+
                 # Send initial message
                 yield StartEvent().to_sse()
 
@@ -316,8 +334,9 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
                 print("Backtest event generator cancelled")
                 return
             finally:
-                # Clean up
-                progress.unregister_handler(progress_handler)
+                # Clean up: unregister handler and remove the per-run tracker
+                tracker.unregister_handler(progress_handler)
+                progress.remove_tracker(run_id)
                 if backtest_task and not backtest_task.done():
                     backtest_task.cancel()
                     try:
@@ -349,4 +368,3 @@ async def get_agents():
         return {"agents": get_agents_list()}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to retrieve agents: {str(e)}")
-

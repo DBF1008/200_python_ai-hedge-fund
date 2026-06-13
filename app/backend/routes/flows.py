@@ -1,14 +1,17 @@
-from fastapi import APIRouter, HTTPException, Depends
+import math
+from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 
 from app.backend.database import get_db
 from app.backend.repositories.flow_repository import FlowRepository
 from app.backend.models.schemas import (
-    FlowCreateRequest, 
-    FlowUpdateRequest, 
-    FlowResponse, 
+    FlowCreateRequest,
+    FlowUpdateRequest,
+    FlowResponse,
     FlowSummaryResponse,
+    FlowListResponse,
+    FlowTagResponse,
     ErrorResponse
 )
 
@@ -57,6 +60,63 @@ async def get_flows(include_templates: bool = True, db: Session = Depends(get_db
         return [FlowSummaryResponse.from_orm(flow) for flow in flows]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to retrieve flows: {str(e)}")
+
+
+@router.get(
+    "/filtered",
+    response_model=FlowListResponse,
+    responses={
+        500: {"model": ErrorResponse, "description": "Internal server error"},
+    },
+)
+async def get_flows_filtered(
+    search: Optional[str] = Query(None, description="Keyword search across name, description, tags"),
+    is_template: Optional[bool] = Query(None, description="Filter by template status"),
+    tag: Optional[str] = Query(None, description="Filter by a specific tag"),
+    sort_by: str = Query("updated_at", description="Sort field: name, created_at, updated_at"),
+    sort_order: str = Query("desc", description="Sort direction: asc, desc"),
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(20, ge=1, le=100, description="Items per page"),
+    db: Session = Depends(get_db),
+):
+    """Get flows with server-side filtering, sorting, and pagination"""
+    try:
+        repo = FlowRepository(db)
+        flows, total = repo.search_flows(
+            search=search,
+            is_template=is_template,
+            tag=tag,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            page=page,
+            page_size=page_size,
+        )
+        total_pages = math.ceil(total / page_size) if page_size > 0 else 0
+        return FlowListResponse(
+            items=[FlowSummaryResponse.from_orm(f) for f in flows],
+            total=total,
+            page=page,
+            page_size=page_size,
+            total_pages=total_pages,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve flows: {str(e)}")
+
+
+@router.get(
+    "/tags",
+    response_model=List[FlowTagResponse],
+    responses={
+        500: {"model": ErrorResponse, "description": "Internal server error"},
+    },
+)
+async def get_flow_tags(db: Session = Depends(get_db)):
+    """Get all unique tags with usage counts"""
+    try:
+        repo = FlowRepository(db)
+        return repo.get_all_tags()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve tags: {str(e)}")
 
 
 @router.get(

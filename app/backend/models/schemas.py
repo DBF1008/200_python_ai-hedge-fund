@@ -194,6 +194,21 @@ class FlowSummaryResponse(BaseModel):
         from_attributes = True
 
 
+class FlowListResponse(BaseModel):
+    """Paginated flow list response"""
+    items: List[FlowSummaryResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+class FlowTagResponse(BaseModel):
+    """A tag with its usage count"""
+    name: str
+    count: int
+
+
 # Flow Run schemas
 class FlowRunCreateRequest(BaseModel):
     """Request to create a new flow run"""

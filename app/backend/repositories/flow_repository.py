@@ -1,4 +1,6 @@
-from typing import List, Optional
+import json
+from typing import List, Optional, Tuple
+from sqlalchemy import Text, func, or_
 from sqlalchemy.orm import Session
 from app.backend.database.models import HedgeFundFlow
 
@@ -43,6 +45,108 @@ class FlowRepository:
         return self.db.query(HedgeFundFlow).filter(
             HedgeFundFlow.name.ilike(f"%{name}%")
         ).order_by(HedgeFundFlow.updated_at.desc()).all()
+
+    def search_flows(
+        self,
+        search: Optional[str] = None,
+        is_template: Optional[bool] = None,
+        tag: Optional[str] = None,
+        sort_by: str = "updated_at",
+        sort_order: str = "desc",
+        page: int = 1,
+        page_size: int = 20,
+    ) -> Tuple[List[HedgeFundFlow], int]:
+        """
+        Unified search/filter/sort/paginate for flows.
+        Returns (list_of_flows, total_count).
+        """
+        query = self.db.query(HedgeFundFlow)
+
+        # Filter by template status
+        if is_template is not None:
+            query = query.filter(HedgeFundFlow.is_template == is_template)
+
+        # Keyword search across name, description, and tags (JSON text)
+        if search:
+            pattern = f"%{search}%"
+            query = query.filter(
+                or_(
+                    HedgeFundFlow.name.ilike(pattern),
+                    HedgeFundFlow.description.ilike(pattern),
+                    # SQLite stores JSON as text; cast to Text for ILIKE
+                    HedgeFundFlow.tags.cast(Text).ilike(pattern),
+                )
+            )
+
+        # Filter by a specific tag (JSON array contains)
+        if tag:
+            # SQLite JSON arrays are stored as '["tag1", "tag2"]'
+            # Match the quoted tag string to avoid partial matches
+            tag_pattern = f'%"{tag}"%'
+            query = query.filter(
+                HedgeFundFlow.tags.cast(Text).ilike(tag_pattern)
+            )
+
+        # Count before pagination
+        total = query.count()
+
+        # Sorting
+        sort_column = {
+            "name": HedgeFundFlow.name,
+            "created_at": HedgeFundFlow.created_at,
+            "updated_at": HedgeFundFlow.updated_at,
+        }.get(sort_by, HedgeFundFlow.updated_at)
+
+        # Handle NULL updated_at: coalesce to created_at
+        if sort_by == "updated_at":
+            sort_expr = func.coalesce(HedgeFundFlow.updated_at, HedgeFundFlow.created_at)
+        else:
+            sort_expr = sort_column
+
+        if sort_order == "asc":
+            query = query.order_by(sort_expr.asc())
+        else:
+            query = query.order_by(sort_expr.desc())
+
+        # Pagination
+        offset = (page - 1) * page_size
+        flows = query.offset(offset).limit(page_size).all()
+
+        return flows, total
+
+    def get_all_tags(self) -> List[dict]:
+        """
+        Collect all unique tags across all flows with their counts.
+        Returns a list of {"name": ..., "count": ...} dicts sorted by count desc.
+        """
+        flows = self.db.query(HedgeFundFlow.tags).filter(
+            HedgeFundFlow.tags.isnot(None)
+        ).all()
+
+        tag_counts: dict[str, int] = {}
+        for (tags_value,) in flows:
+            if tags_value is None:
+                continue
+            # tags_value may be a JSON string or already-parsed list depending on driver
+            if isinstance(tags_value, str):
+                try:
+                    tags_list = json.loads(tags_value)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            elif isinstance(tags_value, list):
+                tags_list = tags_value
+            else:
+                continue
+
+            for t in tags_list:
+                if isinstance(t, str) and t.strip():
+                    tag_counts[t] = tag_counts.get(t, 0) + 1
+
+        return sorted(
+            [{"name": name, "count": count} for name, count in tag_counts.items()],
+            key=lambda x: x["count"],
+            reverse=True,
+        )
     
     def update_flow(self, flow_id: int, name: str = None, description: str = None,
                    nodes: dict = None, edges: dict = None, viewport: dict = None, data: dict = None,

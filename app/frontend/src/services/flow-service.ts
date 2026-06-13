@@ -24,12 +24,68 @@ export interface UpdateFlowRequest {
   tags?: string[];
 }
 
+export interface FlowListParams {
+  search?: string;
+  is_template?: boolean | null;
+  tag?: string;
+  sort_by?: 'name' | 'created_at' | 'updated_at';
+  sort_order?: 'asc' | 'desc';
+  page?: number;
+  page_size?: number;
+}
+
+export interface FlowListResult {
+  items: Flow[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+export interface FlowTag {
+  name: string;
+  count: number;
+}
+
 export const flowService = {
-  // Get all flows
+  // Get all flows (legacy - fetches all without pagination)
   async getFlows(): Promise<Flow[]> {
     const response = await fetch(`${API_BASE_URL}/flows/`);
     if (!response.ok) {
       throw new Error('Failed to fetch flows');
+    }
+    return response.json();
+  },
+
+  // Get flows with server-side filtering, sorting, and pagination
+  async getFlowsFiltered(params: FlowListParams = {}): Promise<FlowListResult> {
+    const searchParams = new URLSearchParams();
+
+    if (params.search) searchParams.set('search', params.search);
+    if (params.is_template !== null && params.is_template !== undefined) {
+      searchParams.set('is_template', String(params.is_template));
+    }
+    if (params.tag) searchParams.set('tag', params.tag);
+    if (params.sort_by) searchParams.set('sort_by', params.sort_by);
+    if (params.sort_order) searchParams.set('sort_order', params.sort_order);
+    if (params.page) searchParams.set('page', String(params.page));
+    if (params.page_size) searchParams.set('page_size', String(params.page_size));
+
+    const queryString = searchParams.toString();
+    const url = `${API_BASE_URL}/flows/filtered${queryString ? `?${queryString}` : ''}`;
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error('Failed to fetch flows');
+    }
+    return response.json();
+  },
+
+  // Get all unique tags with counts
+  async getTags(): Promise<FlowTag[]> {
+    const response = await fetch(`${API_BASE_URL}/flows/tags`);
+    if (!response.ok) {
+      throw new Error('Failed to fetch tags');
     }
     return response.json();
   },

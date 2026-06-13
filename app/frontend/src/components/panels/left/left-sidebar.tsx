@@ -30,18 +30,27 @@ export function LeftSidebar({
   useEffect(() => {
     onWidthChange?.(width);
   }, [width, onWidthChange]);
-  
+
   // Use flow management hook with tabs
   const {
-    flows,
     searchQuery,
+    selectedTag,
+    availableTags,
     isLoading,
     openGroups,
     createDialogOpen,
-    filteredFlows,
     recentFlows,
+    recentPage,
+    recentTotal,
+    recentTotalPages,
+    isLoadingRecent,
     templateFlows,
+    templatePage,
+    templateTotal,
+    templateTotalPages,
+    isLoadingTemplates,
     setSearchQuery,
+    setSelectedTag,
     setCreateDialogOpen,
     handleAccordionChange,
     handleCreateNewFlow,
@@ -50,16 +59,18 @@ export function LeftSidebar({
     handleOpenFlowInTab,
     handleDeleteFlow,
     handleRefresh,
+    goToRecentPage,
+    goToTemplatePage,
   } = useFlowManagementTabs();
 
   return (
-    <div 
+    <div
       ref={elementRef}
       className={cn(
         "h-full bg-panel flex flex-col relative pt-5 border",
         isCollapsed ? "shadow-lg" : "",
       )}
-      style={{ 
+      style={{
         width: `${width}px`
       }}
     >
@@ -67,25 +78,36 @@ export function LeftSidebar({
         onSave={handleSaveCurrentFlow}
         onCreate={handleCreateNewFlow}
       />
-      
+
       <FlowList
-        flows={flows}
         searchQuery={searchQuery}
         isLoading={isLoading}
         openGroups={openGroups}
-        filteredFlows={filteredFlows}
+        selectedTag={selectedTag}
+        availableTags={availableTags}
+        onTagSelect={setSelectedTag}
         recentFlows={recentFlows}
+        recentPage={recentPage}
+        recentTotal={recentTotal}
+        recentTotalPages={recentTotalPages}
+        isLoadingRecent={isLoadingRecent}
+        onRecentPageChange={goToRecentPage}
         templateFlows={templateFlows}
+        templatePage={templatePage}
+        templateTotal={templateTotal}
+        templateTotalPages={templateTotalPages}
+        isLoadingTemplates={isLoadingTemplates}
+        onTemplatePageChange={goToTemplatePage}
         onSearchChange={setSearchQuery}
         onAccordionChange={handleAccordionChange}
         onLoadFlow={handleOpenFlowInTab}
         onDeleteFlow={handleDeleteFlow}
         onRefresh={handleRefresh}
       />
-      
+
       {/* Resize handle - on the right side for left sidebar */}
       {!isDragging && (
-        <div 
+        <div
           className="absolute top-0 right-0 h-full w-1 cursor-ew-resize transition-all duration-150 z-10"
           onMouseDown={startResize}
         />
@@ -98,4 +120,4 @@ export function LeftSidebar({
       />
     </div>
   );
-} 
+}

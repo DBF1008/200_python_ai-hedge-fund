@@ -1,14 +1,15 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 
 from app.backend.database import get_db
 from app.backend.repositories.flow_repository import FlowRepository
 from app.backend.models.schemas import (
-    FlowCreateRequest, 
-    FlowUpdateRequest, 
-    FlowResponse, 
+    FlowCreateRequest,
+    FlowUpdateRequest,
+    FlowResponse,
     FlowSummaryResponse,
+    FlowListResponse,
     ErrorResponse
 )
 
@@ -44,17 +45,45 @@ async def create_flow(request: FlowCreateRequest, db: Session = Depends(get_db))
 
 @router.get(
     "/",
-    response_model=List[FlowSummaryResponse],
+    response_model=FlowListResponse,
     responses={
         500: {"model": ErrorResponse, "description": "Internal server error"},
     },
 )
-async def get_flows(include_templates: bool = True, db: Session = Depends(get_db)):
-    """Get all flows (summary view)"""
+async def get_flows(
+    is_template: Optional[bool] = Query(
+        None, description="Filter by template (true) / non-template (false); omit for all"
+    ),
+    keyword: Optional[str] = Query(
+        None, description="Case-insensitive match against name, description, or tags"
+    ),
+    tags: Optional[List[str]] = Query(
+        None, description="Filter to flows containing any of these exact tags"
+    ),
+    sort_order: str = Query(
+        "desc", pattern="^(asc|desc)$", description="Sort by last update time"
+    ),
+    limit: int = Query(20, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
+    """List flows (summary view) with filtering, search, and pagination"""
     try:
         repo = FlowRepository(db)
-        flows = repo.get_all_flows(include_templates=include_templates)
-        return [FlowSummaryResponse.from_orm(flow) for flow in flows]
+        flows, total = repo.query_flows(
+            is_template=is_template,
+            keyword=keyword,
+            tags=tags,
+            sort_order=sort_order,
+            limit=limit,
+            offset=offset,
+        )
+        return FlowListResponse(
+            items=[FlowSummaryResponse.from_orm(flow) for flow in flows],
+            total=total,
+            limit=limit,
+            offset=offset,
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to retrieve flows: {str(e)}")
 
@@ -155,20 +184,3 @@ async def duplicate_flow(flow_id: int, new_name: str = None, db: Session = Depen
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to duplicate flow: {str(e)}")
-
-
-@router.get(
-    "/search/{name}",
-    response_model=List[FlowSummaryResponse],
-    responses={
-        500: {"model": ErrorResponse, "description": "Internal server error"},
-    },
-)
-async def search_flows(name: str, db: Session = Depends(get_db)):
-    """Search flows by name"""
-    try:
-        repo = FlowRepository(db)
-        flows = repo.get_flows_by_name(name)
-        return [FlowSummaryResponse.from_orm(flow) for flow in flows]
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to search flows: {str(e)}") 

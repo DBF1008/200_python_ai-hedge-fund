@@ -1,4 +1,5 @@
-from typing import List, Optional
+from typing import List, Optional, Tuple
+from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.orm import Session
 from app.backend.database.models import HedgeFundFlow
 
@@ -31,18 +32,59 @@ class FlowRepository:
         """Get a flow by its ID"""
         return self.db.query(HedgeFundFlow).filter(HedgeFundFlow.id == flow_id).first()
     
-    def get_all_flows(self, include_templates: bool = True) -> List[HedgeFundFlow]:
-        """Get all flows, optionally excluding templates"""
+    def query_flows(
+        self,
+        *,
+        is_template: Optional[bool] = None,
+        keyword: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        sort_order: str = "desc",
+        limit: int = 20,
+        offset: int = 0,
+    ) -> Tuple[List[HedgeFundFlow], int]:
+        """Query flows with optional template/keyword/tag filters, sorted by last
+        update time, returning the requested page and the total match count.
+
+        - keyword: case-insensitive partial match against name, description, or tags.
+        - tags: exact match against any of the given tags (JSON array membership).
+        - sort_order: "asc" or "desc" on COALESCE(updated_at, created_at).
+        """
         query = self.db.query(HedgeFundFlow)
-        if not include_templates:
-            query = query.filter(HedgeFundFlow.is_template == False)
-        return query.order_by(HedgeFundFlow.updated_at.desc()).all()
-    
-    def get_flows_by_name(self, name: str) -> List[HedgeFundFlow]:
-        """Search flows by name (case-insensitive partial match)"""
-        return self.db.query(HedgeFundFlow).filter(
-            HedgeFundFlow.name.ilike(f"%{name}%")
-        ).order_by(HedgeFundFlow.updated_at.desc()).all()
+
+        if is_template is not None:
+            query = query.filter(HedgeFundFlow.is_template == is_template)
+
+        if keyword:
+            like = f"%{keyword}%"
+            query = query.filter(
+                or_(
+                    HedgeFundFlow.name.ilike(like),
+                    HedgeFundFlow.description.ilike(like),
+                    cast(HedgeFundFlow.tags, String).ilike(like),
+                )
+            )
+
+        if tags:
+            # Match flows whose JSON `tags` array contains any of the requested tags.
+            each_tag = func.json_each(HedgeFundFlow.tags).table_valued("value")
+            tag_exists = (
+                select(1).select_from(each_tag).where(each_tag.c.value.in_(tags)).exists()
+            )
+            query = query.filter(HedgeFundFlow.tags.isnot(None), tag_exists)
+
+        total = query.count()
+
+        # updated_at is NULL until a flow is edited, so fall back to created_at.
+        order_col = func.coalesce(HedgeFundFlow.updated_at, HedgeFundFlow.created_at)
+        direction = order_col.asc() if sort_order == "asc" else order_col.desc()
+
+        items = (
+            query.order_by(direction, HedgeFundFlow.id.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+        return items, total
     
     def update_flow(self, flow_id: int, name: str = None, description: str = None,
                    nodes: dict = None, edges: dict = None, viewport: dict = None, data: dict = None,

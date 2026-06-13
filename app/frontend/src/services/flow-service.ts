@@ -24,14 +24,44 @@ export interface UpdateFlowRequest {
   tags?: string[];
 }
 
+export interface FlowListParams {
+  isTemplate?: boolean;
+  keyword?: string;
+  tags?: string[];
+  sortOrder?: 'asc' | 'desc';
+  limit?: number;
+  offset?: number;
+}
+
+export interface FlowListResponse {
+  items: Flow[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export const flowService = {
-  // Get all flows
-  async getFlows(): Promise<Flow[]> {
-    const response = await fetch(`${API_BASE_URL}/flows/`);
+  // List flows with server-side filtering, search, and pagination
+  async queryFlows(params: FlowListParams = {}): Promise<FlowListResponse> {
+    const query = new URLSearchParams();
+    if (params.isTemplate !== undefined) query.set('is_template', String(params.isTemplate));
+    if (params.keyword) query.set('keyword', params.keyword);
+    (params.tags ?? []).forEach((tag) => query.append('tags', tag));
+    if (params.sortOrder) query.set('sort_order', params.sortOrder);
+    if (params.limit !== undefined) query.set('limit', String(params.limit));
+    if (params.offset !== undefined) query.set('offset', String(params.offset));
+
+    const response = await fetch(`${API_BASE_URL}/flows/?${query.toString()}`);
     if (!response.ok) {
       throw new Error('Failed to fetch flows');
     }
     return response.json();
+  },
+
+  // Get all flows (convenience wrapper around queryFlows)
+  async getFlows(): Promise<Flow[]> {
+    const { items } = await this.queryFlows({});
+    return items;
   },
 
   // Get a specific flow

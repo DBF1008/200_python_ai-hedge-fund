@@ -194,6 +194,14 @@ class FlowSummaryResponse(BaseModel):
         from_attributes = True
 
 
+class FlowListResponse(BaseModel):
+    """Paginated envelope for flow listing/search results"""
+    items: List[FlowSummaryResponse]
+    total: int
+    limit: int
+    offset: int
+
+
 # Flow Run schemas
 class FlowRunCreateRequest(BaseModel):
     """Request to create a new flow run"""

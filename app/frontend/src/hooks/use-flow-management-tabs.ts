@@ -12,19 +12,28 @@ import { TabService } from '@/services/tab-service';
 import { Flow } from '@/types/flow';
 import { useCallback, useEffect, useState } from 'react';
 
+// Page size for incremental ("Load more") loading of each flow group.
+const PAGE_SIZE = 20;
+// Delay before a search query is sent to the server (avoids a request per keystroke).
+const SEARCH_DEBOUNCE_MS = 300;
+
 export interface UseFlowManagementTabsReturn {
   // State
-  flows: Flow[];
   searchQuery: string;
   isLoading: boolean;
   openGroups: string[];
   createDialogOpen: boolean;
-  
-  // Computed values
-  filteredFlows: Flow[];
+
+  // Server-driven groups
   recentFlows: Flow[];
   templateFlows: Flow[];
-  
+  recentTotal: number;
+  templateTotal: number;
+  hasMoreRecent: boolean;
+  hasMoreTemplates: boolean;
+  loadingMoreRecent: boolean;
+  loadingMoreTemplates: boolean;
+
   // Actions
   setSearchQuery: (query: string) => void;
   setOpenGroups: (groups: string[]) => void;
@@ -36,7 +45,9 @@ export interface UseFlowManagementTabsReturn {
   handleOpenFlowInTab: (flow: Flow) => Promise<void>;
   handleDeleteFlow: (flow: Flow) => Promise<void>;
   handleRefresh: () => Promise<void>;
-  
+  loadMoreRecent: () => Promise<void>;
+  loadMoreTemplates: () => Promise<void>;
+
   // Internal functions (for testing/advanced use)
   loadFlows: () => Promise<void>;
   createDefaultFlow: () => Promise<void>;
@@ -48,24 +59,32 @@ export function useFlowManagementTabs(): UseFlowManagementTabsReturn {
   const { exportNodeContextData } = useNodeContext();
   const { openTab, isTabOpen, closeTab } = useTabsContext();
   const { success, error } = useToastManager();
-  
-  // State for flows
-  const [flows, setFlows] = useState<Flow[]>([]);
+
+  // UI state
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [openGroups, setOpenGroups] = useState<string[]>(['recent-flows']);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+
+  // Server-driven, paginated flow groups
+  const [recentFlows, setRecentFlows] = useState<Flow[]>([]);
+  const [templateFlows, setTemplateFlows] = useState<Flow[]>([]);
+  const [recentTotal, setRecentTotal] = useState(0);
+  const [templateTotal, setTemplateTotal] = useState(0);
+  const [loadingMoreRecent, setLoadingMoreRecent] = useState(false);
+  const [loadingMoreTemplates, setLoadingMoreTemplates] = useState(false);
 
   // Enhanced save function that includes internal node states AND node context data
   const saveCurrentFlowWithStates = useCallback(async (): Promise<Flow | null> => {
     try {
       // Get current nodes from React Flow
       const currentNodes = reactFlowInstance.getNodes();
-      
+
       // Get node context data (runtime data: agent status, messages, output data)
       const flowId = currentFlowId?.toString() || null;
       const nodeContextData = exportNodeContextData(flowId);
-      
+
       // Enhance nodes with internal states
       const nodesWithStates = currentNodes.map((node: any) => {
         const internalState = getNodeInternalState(node.id);
@@ -81,11 +100,11 @@ export function useFlowManagementTabs(): UseFlowManagementTabsReturn {
 
       // Temporarily replace nodes in React Flow with enhanced nodes
       reactFlowInstance.setNodes(nodesWithStates);
-      
+
       try {
         // Use the context's save function which handles currentFlowId properly
         const savedFlow = await saveCurrentFlow();
-        
+
         if (savedFlow) {
           // After basic save, update with node context data
           const updatedFlow = await flowService.updateFlow(savedFlow.id, {
@@ -95,10 +114,10 @@ export function useFlowManagementTabs(): UseFlowManagementTabsReturn {
               nodeContextData, // Add runtime data from node context
             }
           });
-          
+
           return updatedFlow;
         }
-        
+
         return savedFlow;
       } finally {
         // Restore original nodes (without internal_state in React Flow)
@@ -117,10 +136,11 @@ export function useFlowManagementTabs(): UseFlowManagementTabsReturn {
       const nodes = reactFlowInstance?.getNodes() || [];
       const edges = reactFlowInstance?.getEdges() || [];
       const viewport = reactFlowInstance?.getViewport() || { x: 0, y: 0, zoom: 1 };
-      
+
       const defaultFlow = await flowService.createDefaultFlow(nodes, edges, viewport);
-      setFlows([defaultFlow]);
-      
+      setRecentFlows([defaultFlow]);
+      setRecentTotal(1);
+
       // Open the default flow in a tab
       const tabData = TabService.createFlowTab(defaultFlow);
       openTab(tabData);
@@ -129,46 +149,79 @@ export function useFlowManagementTabs(): UseFlowManagementTabsReturn {
     }
   }, [reactFlowInstance, openTab]);
 
-  // Load flows from API
+  // Load the first page of both groups from the API (applies the current search).
   const loadFlows = useCallback(async () => {
     setIsLoading(true);
     try {
-      const flowsData = await flowService.getFlows();
-      setFlows(flowsData);
-      
-      // Don't automatically create or open tabs on startup
-      // Let users explicitly open tabs by clicking on flows
-      // Tabs will be restored from localStorage if they exist
-      
+      const keyword = debouncedQuery || undefined;
+      const [recent, templates] = await Promise.all([
+        flowService.queryFlows({ isTemplate: false, keyword, sortOrder: 'desc', limit: PAGE_SIZE, offset: 0 }),
+        flowService.queryFlows({ isTemplate: true, keyword, sortOrder: 'desc', limit: PAGE_SIZE, offset: 0 }),
+      ]);
+      setRecentFlows(recent.items);
+      setRecentTotal(recent.total);
+      setTemplateFlows(templates.items);
+      setTemplateTotal(templates.total);
     } catch (error) {
       console.error('Error loading flows:', error);
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [debouncedQuery]);
 
-  // Load flows on mount
+  // Debounce the search query before it drives server queries.
+  useEffect(() => {
+    const handle = setTimeout(() => setDebouncedQuery(searchQuery.trim()), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(handle);
+  }, [searchQuery]);
+
+  // Reload (reset to first page) whenever the debounced query changes; also runs on mount.
   useEffect(() => {
     loadFlows();
   }, [loadFlows]);
 
-  // Filter flows based on search query
-  const filteredFlows = flows.filter(flow =>
-    flow.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    flow.description?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    flow.tags?.some(tag => tag.toLowerCase().includes(searchQuery.toLowerCase()))
-  );
+  // Append the next page of recent (non-template) flows.
+  const loadMoreRecent = useCallback(async () => {
+    setLoadingMoreRecent(true);
+    try {
+      const res = await flowService.queryFlows({
+        isTemplate: false,
+        keyword: debouncedQuery || undefined,
+        sortOrder: 'desc',
+        limit: PAGE_SIZE,
+        offset: recentFlows.length,
+      });
+      setRecentFlows((prev) => [...prev, ...res.items]);
+      setRecentTotal(res.total);
+    } catch (error) {
+      console.error('Error loading more recent flows:', error);
+    } finally {
+      setLoadingMoreRecent(false);
+    }
+  }, [debouncedQuery, recentFlows.length]);
 
-  // Sort flows by updated_at descending, then group them
-  const sortedFlows = [...filteredFlows].sort((a, b) => {
-    const dateA = new Date(a.updated_at || a.created_at);
-    const dateB = new Date(b.updated_at || b.created_at);
-    return dateB.getTime() - dateA.getTime();
-  });
+  // Append the next page of template flows.
+  const loadMoreTemplates = useCallback(async () => {
+    setLoadingMoreTemplates(true);
+    try {
+      const res = await flowService.queryFlows({
+        isTemplate: true,
+        keyword: debouncedQuery || undefined,
+        sortOrder: 'desc',
+        limit: PAGE_SIZE,
+        offset: templateFlows.length,
+      });
+      setTemplateFlows((prev) => [...prev, ...res.items]);
+      setTemplateTotal(res.total);
+    } catch (error) {
+      console.error('Error loading more templates:', error);
+    } finally {
+      setLoadingMoreTemplates(false);
+    }
+  }, [debouncedQuery, templateFlows.length]);
 
-  // Group flows
-  const recentFlows = sortedFlows.filter(f => !f.is_template).slice(0, 10);
-  const templateFlows = sortedFlows.filter(f => f.is_template);
+  const hasMoreRecent = recentFlows.length < recentTotal;
+  const hasMoreTemplates = templateFlows.length < templateTotal;
 
   // Event handlers
   const handleAccordionChange = useCallback((value: string[]) => {
@@ -183,10 +236,10 @@ export function useFlowManagementTabs(): UseFlowManagementTabsReturn {
     // Open the new flow in a tab
     const tabData = TabService.createFlowTab(newFlow);
     openTab(tabData);
-    
+
     // Remember it
     localStorage.setItem('lastSelectedFlowId', newFlow.id.toString());
-    
+
     // Refresh the flows list to show the new flow
     await loadFlows();
   }, [openTab, loadFlows]);
@@ -210,22 +263,22 @@ export function useFlowManagementTabs(): UseFlowManagementTabsReturn {
   }, [saveCurrentFlowWithStates, loadFlows, success, error]);
 
   const handleOpenFlowInTab = useCallback(async (flow: Flow) => {
-    try {      
+    try {
       // Always fetch the full flow data including nodes, edges, and viewport
       // This ensures we have the latest data from the backend
       const fullFlow = await flowService.getFlow(flow.id);
-      
+
       // Create tab data with configuration restoration only
       const createTabWithConfigRestore = (flowData: Flow) => {
         const tabData = TabService.createFlowTab(flowData);
-        
+
         // Enhance the tab content to restore only configuration data when the tab is activated
         return {
           ...tabData,
           onActivate: () => {
             // NOTE: We intentionally do NOT restore nodeContextData here
             // Runtime execution data (messages, analysis, agent status) should start fresh
-            
+
             // Restore internal states for each node (use-node-state data - configuration only)
             if (flowData.nodes) {
               flowData.nodes.forEach((node: any) => {
@@ -237,13 +290,13 @@ export function useFlowManagementTabs(): UseFlowManagementTabsReturn {
           }
         };
       };
-      
+
       // Check if tab is already open
       if (isTabOpen(flow.id.toString(), 'flow')) {
         // Tab exists - update it with fresh data and focus it
         const tabId = `flow-${flow.id}`;
         const enhancedTabData = createTabWithConfigRestore(fullFlow);
-        
+
         // Update the existing tab with fresh data
         openTab({
           id: tabId,
@@ -253,7 +306,7 @@ export function useFlowManagementTabs(): UseFlowManagementTabsReturn {
           flow: enhancedTabData.flow,
           metadata: enhancedTabData.metadata,
         });
-        
+
         // Trigger the enhanced restoration
         if (enhancedTabData.onActivate) {
           enhancedTabData.onActivate();
@@ -262,13 +315,13 @@ export function useFlowManagementTabs(): UseFlowManagementTabsReturn {
         // Create new tab with fresh data
         const enhancedTabData = createTabWithConfigRestore(fullFlow);
         openTab(enhancedTabData);
-        
+
         // Trigger the enhanced restoration for new tab
         if (enhancedTabData.onActivate) {
           enhancedTabData.onActivate();
         }
       }
-      
+
       // Remember the selected flow
       localStorage.setItem('lastSelectedFlowId', fullFlow.id.toString());
     } catch (err) {
@@ -284,20 +337,20 @@ export function useFlowManagementTabs(): UseFlowManagementTabsReturn {
   const handleDeleteFlow = useCallback(async (flow: Flow) => {
     try {
       await flowService.deleteFlow(flow.id);
-      
+
       // Close the tab if it's open
       const tabId = `flow-${flow.id}`;
       closeTab(tabId);
-      
+
       // Clear node states for the deleted flow
       clearFlowNodeStates(flow.id.toString());
-      
+
       // Remove from localStorage if it was the last selected
       const lastSelectedFlowId = localStorage.getItem('lastSelectedFlowId');
       if (lastSelectedFlowId === flow.id.toString()) {
         localStorage.removeItem('lastSelectedFlowId');
       }
-      
+
       // Refresh the flows list
       await loadFlows();
     } catch (error) {
@@ -307,17 +360,21 @@ export function useFlowManagementTabs(): UseFlowManagementTabsReturn {
 
   return {
     // State
-    flows,
     searchQuery,
     isLoading,
     openGroups,
     createDialogOpen,
-    
-    // Computed values
-    filteredFlows,
+
+    // Server-driven groups
     recentFlows,
     templateFlows,
-    
+    recentTotal,
+    templateTotal,
+    hasMoreRecent,
+    hasMoreTemplates,
+    loadingMoreRecent,
+    loadingMoreTemplates,
+
     // Actions
     setSearchQuery,
     setOpenGroups,
@@ -329,9 +386,11 @@ export function useFlowManagementTabs(): UseFlowManagementTabsReturn {
     handleOpenFlowInTab,
     handleDeleteFlow,
     handleRefresh,
-    
+    loadMoreRecent,
+    loadMoreTemplates,
+
     // Internal functions
     loadFlows,
     createDefaultFlow,
   };
-} 
+}

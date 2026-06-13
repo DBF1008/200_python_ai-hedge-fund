@@ -33,14 +33,18 @@ export function LeftSidebar({
   
   // Use flow management hook with tabs
   const {
-    flows,
     searchQuery,
     isLoading,
     openGroups,
     createDialogOpen,
-    filteredFlows,
     recentFlows,
     templateFlows,
+    recentTotal,
+    templateTotal,
+    hasMoreRecent,
+    hasMoreTemplates,
+    loadingMoreRecent,
+    loadingMoreTemplates,
     setSearchQuery,
     setCreateDialogOpen,
     handleAccordionChange,
@@ -50,6 +54,8 @@ export function LeftSidebar({
     handleOpenFlowInTab,
     handleDeleteFlow,
     handleRefresh,
+    loadMoreRecent,
+    loadMoreTemplates,
   } = useFlowManagementTabs();
 
   return (
@@ -69,18 +75,24 @@ export function LeftSidebar({
       />
       
       <FlowList
-        flows={flows}
         searchQuery={searchQuery}
         isLoading={isLoading}
         openGroups={openGroups}
-        filteredFlows={filteredFlows}
         recentFlows={recentFlows}
         templateFlows={templateFlows}
+        recentTotal={recentTotal}
+        templateTotal={templateTotal}
+        hasMoreRecent={hasMoreRecent}
+        hasMoreTemplates={hasMoreTemplates}
+        loadingMoreRecent={loadingMoreRecent}
+        loadingMoreTemplates={loadingMoreTemplates}
         onSearchChange={setSearchQuery}
         onAccordionChange={handleAccordionChange}
         onLoadFlow={handleOpenFlowInTab}
         onDeleteFlow={handleDeleteFlow}
         onRefresh={handleRefresh}
+        onLoadMoreRecent={loadMoreRecent}
+        onLoadMoreTemplates={loadMoreTemplates}
       />
       
       {/* Resize handle - on the right side for left sidebar */}

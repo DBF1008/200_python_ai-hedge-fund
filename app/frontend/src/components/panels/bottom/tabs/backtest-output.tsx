@@ -150,6 +150,141 @@ function BacktestTradingTable({ agentData }: { agentData: Record<string, any> })
   );
 }
 
+// ---- Inline-SVG charting (dependency-free) ----
+const CHART_W = 720;
+const CHART_H = 220;
+const CHART_PAD = { top: 14, right: 12, bottom: 24, left: 12 };
+
+function niceCurrency(n: number): string {
+  return `$${Math.round(n).toLocaleString()}`;
+}
+
+// Build an SVG polyline "points" string from (x,y) pairs in pixel space.
+function toPolyline(points: Array<[number, number]>): string {
+  return points.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+}
+
+// Equity curve: portfolio value vs buy-and-hold SPY benchmark (shared y-scale).
+function EquityCurveChart({ data }: { data: any[] }) {
+  if (!data || data.length === 0) return null;
+
+  const innerW = CHART_W - CHART_PAD.left - CHART_PAD.right;
+  const innerH = CHART_H - CHART_PAD.top - CHART_PAD.bottom;
+  const n = data.length;
+
+  const portfolioVals = data.map((d) => Number(d.portfolio_value));
+  const benchVals = data.map((d) => (d.benchmark_value == null ? null : Number(d.benchmark_value)));
+  const allVals = [...portfolioVals, ...benchVals.filter((v): v is number => v != null)];
+  const minV = Math.min(...allVals);
+  const maxV = Math.max(...allVals);
+  const span = maxV - minV || 1;
+
+  const xAt = (i: number) => CHART_PAD.left + (n <= 1 ? innerW / 2 : (i / (n - 1)) * innerW);
+  const yAt = (v: number) => CHART_PAD.top + innerH - ((v - minV) / span) * innerH;
+
+  const portfolioPts = toPolyline(portfolioVals.map((v, i): [number, number] => [xAt(i), yAt(v)]));
+  // Benchmark may have gaps (null before first quote); plot only available points.
+  const benchPts = toPolyline(
+    benchVals
+      .map((v, i) => (v == null ? null : ([xAt(i), yAt(v)] as [number, number])))
+      .filter((p): p is [number, number] => p != null)
+  );
+
+  const startDate = data[0]?.date ?? '';
+  const endDate = data[n - 1]?.date ?? '';
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-4 text-xs">
+        <span className="flex items-center gap-1">
+          <span className="inline-block w-3 h-0.5" style={{ backgroundColor: '#10b981' }} />Portfolio
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="inline-block w-3 h-0.5" style={{ backgroundColor: '#f59e0b' }} />{'SPY (Buy & Hold)'}
+        </span>
+      </div>
+      <svg
+        viewBox={`0 0 ${CHART_W} ${CHART_H}`}
+        className="w-full h-auto"
+        role="img"
+        aria-label="Equity curve versus SPY benchmark"
+      >
+        <line
+          x1={CHART_PAD.left}
+          y1={CHART_PAD.top + innerH}
+          x2={CHART_PAD.left + innerW}
+          y2={CHART_PAD.top + innerH}
+          stroke="currentColor"
+          className="text-muted-foreground"
+          strokeOpacity={0.3}
+        />
+        {benchPts && <polyline points={benchPts} fill="none" stroke="#f59e0b" strokeWidth={1.5} />}
+        <polyline points={portfolioPts} fill="none" stroke="#10b981" strokeWidth={1.5} />
+        <text x={CHART_PAD.left} y={CHART_PAD.top + 9} fontSize={10} fill="currentColor" className="text-muted-foreground">{niceCurrency(maxV)}</text>
+        <text x={CHART_PAD.left} y={CHART_PAD.top + innerH - 2} fontSize={10} fill="currentColor" className="text-muted-foreground">{niceCurrency(minV)}</text>
+        <text x={CHART_PAD.left} y={CHART_H - 6} fontSize={10} fill="currentColor" className="text-muted-foreground">{startDate}</text>
+        <text x={CHART_PAD.left + innerW} y={CHART_H - 6} fontSize={10} textAnchor="end" fill="currentColor" className="text-muted-foreground">{endDate}</text>
+      </svg>
+    </div>
+  );
+}
+
+// Daily exposures: gross / net / long / short (shared y-scale incl. zero).
+function ExposureChart({ data }: { data: any[] }) {
+  if (!data || data.length === 0) return null;
+
+  const innerW = CHART_W - CHART_PAD.left - CHART_PAD.right;
+  const innerH = CHART_H - CHART_PAD.top - CHART_PAD.bottom;
+  const n = data.length;
+
+  const series = [
+    { key: 'gross_exposure', color: '#0ea5e9', label: 'Gross' },
+    { key: 'net_exposure', color: '#8b5cf6', label: 'Net' },
+    { key: 'long_exposure', color: '#22c55e', label: 'Long' },
+    { key: 'short_exposure', color: '#ef4444', label: 'Short' },
+  ];
+
+  const allVals = series.flatMap((s) => data.map((d) => Number(d[s.key] ?? 0)));
+  const minV = Math.min(0, ...allVals);
+  const maxV = Math.max(...allVals);
+  const span = maxV - minV || 1;
+
+  const xAt = (i: number) => CHART_PAD.left + (n <= 1 ? innerW / 2 : (i / (n - 1)) * innerW);
+  const yAt = (v: number) => CHART_PAD.top + innerH - ((v - minV) / span) * innerH;
+
+  const zeroY = yAt(0);
+  const startDate = data[0]?.date ?? '';
+  const endDate = data[n - 1]?.date ?? '';
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-4 text-xs flex-wrap">
+        {series.map((s) => (
+          <span key={s.key} className="flex items-center gap-1">
+            <span className="inline-block w-3 h-0.5" style={{ backgroundColor: s.color }} />{s.label}
+          </span>
+        ))}
+      </div>
+      <svg
+        viewBox={`0 0 ${CHART_W} ${CHART_H}`}
+        className="w-full h-auto"
+        role="img"
+        aria-label="Daily portfolio exposures"
+      >
+        <line x1={CHART_PAD.left} y1={zeroY} x2={CHART_PAD.left + innerW} y2={zeroY} stroke="currentColor" className="text-muted-foreground" strokeOpacity={0.3} />
+        {series.map((s) => {
+          const pts = toPolyline(data.map((d, i): [number, number] => [xAt(i), yAt(Number(d[s.key] ?? 0))]));
+          return <polyline key={s.key} points={pts} fill="none" stroke={s.color} strokeWidth={1.5} />;
+        })}
+        <text x={CHART_PAD.left} y={CHART_PAD.top + 9} fontSize={10} fill="currentColor" className="text-muted-foreground">{niceCurrency(maxV)}</text>
+        <text x={CHART_PAD.left} y={CHART_PAD.top + innerH - 2} fontSize={10} fill="currentColor" className="text-muted-foreground">{niceCurrency(minV)}</text>
+        <text x={CHART_PAD.left} y={CHART_H - 6} fontSize={10} fill="currentColor" className="text-muted-foreground">{startDate}</text>
+        <text x={CHART_PAD.left + innerW} y={CHART_H - 6} fontSize={10} textAnchor="end" fill="currentColor" className="text-muted-foreground">{endDate}</text>
+      </svg>
+    </div>
+  );
+}
+
 // Component for displaying backtest results
 function BacktestResults({ outputData }: { outputData: any }) {
   if (!outputData) {
@@ -259,7 +394,21 @@ function BacktestResults({ outputData }: { outputData: any }) {
             </div>
           </div>
         </div>
-        
+
+        {/* Plottable time-series: equity curve vs SPY benchmark and daily exposures */}
+        {outputData.timeseries && outputData.timeseries.length > 0 && (
+          <div className="space-y-6 mb-6">
+            <div>
+              <h4 className="font-medium mb-2">Equity Curve vs SPY</h4>
+              <EquityCurveChart data={outputData.timeseries} />
+            </div>
+            <div>
+              <h4 className="font-medium mb-2">Exposures</h4>
+              <ExposureChart data={outputData.timeseries} />
+            </div>
+          </div>
+        )}
+
         {/* Final Positions */}
         {final_portfolio.positions && (
           <div>

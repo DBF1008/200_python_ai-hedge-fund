@@ -110,6 +110,9 @@ class BacktestDayResult(BaseModel):
     gross_exposure: float
     net_exposure: float
     long_short_ratio: Optional[float] = None
+    portfolio_return: Optional[float] = None
+    benchmark_value: Optional[float] = None
+    benchmark_return_pct: Optional[float] = None
 
 
 class BacktestPerformanceMetrics(BaseModel):
@@ -122,10 +125,25 @@ class BacktestPerformanceMetrics(BaseModel):
     net_exposure: Optional[float] = None
 
 
+class BacktestTimeseriesPoint(BaseModel):
+    """A single plottable point: equity value, normalized SPY benchmark, and exposures."""
+    date: str
+    portfolio_value: float
+    return_pct: float
+    benchmark_value: Optional[float] = None
+    benchmark_return_pct: Optional[float] = None
+    long_exposure: float
+    short_exposure: float
+    gross_exposure: float
+    net_exposure: float
+    long_short_ratio: Optional[float] = None
+
+
 class BacktestResponse(BaseModel):
     results: List[BacktestDayResult]
     performance_metrics: BacktestPerformanceMetrics
     final_portfolio: Dict[str, Any]
+    timeseries: List[BacktestTimeseriesPoint] = []
 
 
 class HedgeFundRequest(BaseHedgeFundRequest):

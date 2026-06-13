@@ -14,6 +14,7 @@ from src.tools.api import (
 )
 from app.backend.services.graph import run_graph_async, parse_hedge_fund_response
 from app.backend.services.portfolio import create_portfolio
+from src.backtesting.benchmarks import BenchmarkCalculator
 
 class BacktestService:
     """
@@ -56,6 +57,11 @@ class BacktestService:
         self.model_provider = model_provider
         self.request = request
         self.portfolio_values = []
+        # Benchmark (buy-and-hold SPY) comparison and plottable time-series
+        self._benchmark = BenchmarkCalculator()
+        self.benchmark_ticker = "SPY"
+        self.timeseries: List[Dict[str, Any]] = []
+        self._api_key: Optional[str] = None
 
     def execute_trade(self, ticker: str, action: str, quantity: float, current_price: float) -> int:
         """
@@ -228,12 +234,16 @@ class BacktestService:
         start_date_dt = end_date_dt - relativedelta(years=1)
         start_date_str = start_date_dt.strftime("%Y-%m-%d")
         api_key = self.request.api_keys.get("FINANCIAL_DATASETS_API_KEY")
+        self._api_key = api_key
 
         for ticker in self.tickers:
             get_prices(ticker, start_date_str, self.end_date, api_key=api_key)
             get_financial_metrics(ticker, self.end_date, limit=10, api_key=api_key)
             get_insider_trades(ticker, self.end_date, start_date=self.start_date, limit=1000, api_key=api_key)
             get_company_news(ticker, self.end_date, start_date=self.start_date, limit=1000, api_key=api_key)
+
+        # Prefetch benchmark prices so per-day and final series lookups hit cache
+        get_prices(self.benchmark_ticker, self.start_date, self.end_date, api_key=api_key)
 
     def _update_performance_metrics(self, performance_metrics: Dict[str, Any]):
         """Update performance metrics using daily returns."""
@@ -281,6 +291,49 @@ class BacktestService:
         else:
             performance_metrics["max_drawdown"] = 0.0
             performance_metrics["max_drawdown_date"] = None
+
+    @staticmethod
+    def _build_timeseries(
+        portfolio_values: List[Dict[str, Any]],
+        benchmark_by_date: Dict[str, Optional[float]],
+        initial_capital: float,
+    ) -> List[Dict[str, Any]]:
+        """Assemble a plottable, JSON-serializable time-series from portfolio values.
+
+        Pure (no network/I/O) so it can be unit-tested in isolation. For each
+        portfolio-value point it stringifies the Date, computes ``return_pct``
+        relative to ``initial_capital``, merges the buy-and-hold SPY benchmark
+        value/return from ``benchmark_by_date`` (nullable), and passes exposure
+        fields through (the seed day-0 point has no exposures, so it defaults).
+        """
+        series: List[Dict[str, Any]] = []
+        base = float(initial_capital) if initial_capital else 0.0
+
+        for pv in portfolio_values:
+            date_str = pd.Timestamp(pv["Date"]).strftime("%Y-%m-%d")
+            portfolio_value = float(pv["Portfolio Value"])
+            return_pct = (portfolio_value / base - 1.0) * 100.0 if base else 0.0
+
+            benchmark_value = benchmark_by_date.get(date_str)
+            if benchmark_value is not None and base:
+                benchmark_return_pct: Optional[float] = (float(benchmark_value) / base - 1.0) * 100.0
+            else:
+                benchmark_return_pct = None
+
+            series.append({
+                "date": date_str,
+                "portfolio_value": portfolio_value,
+                "return_pct": return_pct,
+                "benchmark_value": float(benchmark_value) if benchmark_value is not None else None,
+                "benchmark_return_pct": benchmark_return_pct,
+                "long_exposure": float(pv.get("Long Exposure", 0.0) or 0.0),
+                "short_exposure": float(pv.get("Short Exposure", 0.0) or 0.0),
+                "gross_exposure": float(pv.get("Gross Exposure", 0.0) or 0.0),
+                "net_exposure": float(pv.get("Net Exposure", 0.0) or 0.0),
+                "long_short_ratio": pv.get("Long/Short Ratio"),
+            })
+
+        return series
 
     async def run_backtest_async(self, progress_callback: Optional[Callable] = None) -> Dict[str, Any]:
         """
@@ -419,7 +472,17 @@ class BacktestService:
 
             # Calculate performance metrics for this day
             portfolio_return = (total_value / self.initial_capital - 1) * 100
-            
+
+            # Buy-and-hold SPY benchmark for this day (nullable when unavailable)
+            benchmark_return_pct = self._benchmark.get_return_pct(
+                self.benchmark_ticker, self.start_date, current_date_str, api_key=self._api_key
+            )
+            benchmark_value = (
+                self.initial_capital * (1.0 + benchmark_return_pct / 100.0)
+                if benchmark_return_pct is not None
+                else None
+            )
+
             # Update performance metrics if we have enough data
             if len(self.portfolio_values) > 2:
                 self._update_performance_metrics(performance_metrics)
@@ -439,6 +502,8 @@ class BacktestService:
                 "net_exposure": net_exposure,
                 "long_short_ratio": long_short_ratio,
                 "portfolio_return": portfolio_return,
+                "benchmark_value": benchmark_value,
+                "benchmark_return_pct": benchmark_return_pct,
                 "performance_metrics": performance_metrics.copy(),
                 # Add detailed trading information for each ticker
                 "ticker_details": []
@@ -504,11 +569,26 @@ class BacktestService:
         # Store final performance metrics
         self.performance_metrics = performance_metrics
 
+        # Build the plottable time-series: equity curve + normalized SPY benchmark
+        # curve + daily exposures, sampled at every portfolio-value date.
+        benchmark_by_date = self._benchmark.get_value_series(
+            self.benchmark_ticker,
+            self.start_date,
+            self.end_date,
+            base_value=self.initial_capital,
+            dates=[pv["Date"] for pv in self.portfolio_values],
+            api_key=self._api_key,
+        )
+        self.timeseries = self._build_timeseries(
+            self.portfolio_values, benchmark_by_date, self.initial_capital
+        )
+
         return {
             "results": backtest_results,
             "performance_metrics": performance_metrics,
             "portfolio_values": self.portfolio_values,
             "final_portfolio": self.portfolio,
+            "timeseries": self.timeseries,
         }
 
     def run_backtest_sync(self) -> Dict[str, Any]:

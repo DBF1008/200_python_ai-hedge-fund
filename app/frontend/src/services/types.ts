@@ -70,6 +70,22 @@ export interface BacktestDayResult {
   gross_exposure: number;
   net_exposure: number;
   long_short_ratio: number | null;
+  portfolio_return?: number;
+  benchmark_value?: number | null;
+  benchmark_return_pct?: number | null;
+}
+
+export interface BacktestTimeseriesPoint {
+  date: string;
+  portfolio_value: number;
+  return_pct: number;
+  benchmark_value: number | null;
+  benchmark_return_pct: number | null;
+  long_exposure: number;
+  short_exposure: number;
+  gross_exposure: number;
+  net_exposure: number;
+  long_short_ratio: number | null;
 }
 
 export interface BacktestPerformanceMetrics {

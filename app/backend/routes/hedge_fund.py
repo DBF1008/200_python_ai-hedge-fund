@@ -308,6 +308,7 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
                         "performance_metrics": performance_metrics.model_dump(),
                         "final_portfolio": result["final_portfolio"],
                         "total_days": len(result["results"]),
+                        "timeseries": result.get("timeseries", []),
                     }
                 )
                 yield final_data.to_sse()

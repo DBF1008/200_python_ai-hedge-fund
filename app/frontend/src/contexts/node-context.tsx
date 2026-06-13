@@ -1,4 +1,5 @@
 import { LanguageModel } from '@/data/models';
+import type { BacktestTimeseriesPoint } from '@/services/types';
 import { createContext, ReactNode, useCallback, useContext, useState } from 'react';
 
 export type NodeStatus = 'IDLE' | 'IN_PROGRESS' | 'COMPLETE' | 'ERROR';
@@ -43,6 +44,8 @@ export interface OutputNodeData {
     positions: Record<string, any>;
   };
   total_days?: number;
+  // Plottable backtest time-series (equity curve + SPY benchmark + exposures)
+  timeseries?: BacktestTimeseriesPoint[];
 }
 
 // Default agent node state

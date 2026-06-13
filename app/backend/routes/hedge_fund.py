@@ -71,7 +71,10 @@ async def run(request_data: HedgeFundRequest, request: Request, db: Session = De
                 event = ProgressUpdateEvent(agent=agent_name, ticker=ticker, status=status, timestamp=timestamp, analysis=analysis)
                 progress_queue.put_nowait(event)
 
-            # Register our handler with the progress tracker
+            # Reset any leftover progress state so this run starts clean and does
+            # not inherit a previous run's agent statuses/analysis/Done-Error
+            # results, then register our handler with the progress tracker.
+            progress.reset()
             progress.register_handler(progress_handler)
 
             try:
@@ -140,8 +143,10 @@ async def run(request_data: HedgeFundRequest, request: Request, db: Session = De
                 print("Event generator cancelled")
                 return
             finally:
-                # Clean up
+                # Clean up: detach this run's handler and clear its progress state
+                # so the next run/observer does not inherit it.
                 progress.unregister_handler(progress_handler)
+                progress.reset()
                 if run_task and not run_task.done():
                     run_task.cancel()
                     try:
@@ -255,7 +260,10 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
                     )
                     progress_queue.put_nowait(event)
 
-            # Register our handler with the progress tracker to capture agent updates
+            # Reset any leftover progress state so this backtest starts clean and
+            # does not inherit a previous run's agent statuses/analysis/Done-Error
+            # results, then register our handler to capture agent updates.
+            progress.reset()
             progress.register_handler(progress_handler)
             
             try:
@@ -316,8 +324,10 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
                 print("Backtest event generator cancelled")
                 return
             finally:
-                # Clean up
+                # Clean up: detach this run's handler and clear its progress state
+                # so the next run/observer does not inherit it.
                 progress.unregister_handler(progress_handler)
+                progress.reset()
                 if backtest_task and not backtest_task.done():
                     backtest_task.cancel()
                     try:

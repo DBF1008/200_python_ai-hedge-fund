@@ -100,6 +100,12 @@ export const api = {
     // Pass the unique node IDs directly to the backend
     const backendParams = params;
 
+    // Reset node state up-front so this run starts from a clean slate and never
+    // inherits the previous run's agent statuses/analysis/Done-Error results while
+    // we wait for the backend's first event. We intentionally do not rely on the
+    // backend "start" event for this reset.
+    nodeContext.resetAllNodes(flowId);
+
     // For SSE connections with FastAPI, we need to use POST
     // First, create the controller
     const controller = new AbortController();
@@ -163,8 +169,8 @@ export const api = {
                   // Process based on event type
                   switch (eventType) {
                     case 'start':
-                      // Reset all nodes at the start of a new run
-                      nodeContext.resetAllNodes(flowId);
+                      // Node state was already reset before the request was sent,
+                      // so there is nothing to clear here.
                       break;
                     case 'progress':
                       if (eventData.agent) {
@@ -250,6 +256,11 @@ export const api = {
           if (flowId) {
             const currentConnection = flowConnectionManager.getConnection(flowId);
             if (currentConnection.state === 'connected') {
+              // The stream ended without a terminal (complete/error) event - e.g. the
+              // backend closed the connection after a disconnect/cancel. Clear any node
+              // statuses left mid-flight so we don't report stale IN_PROGRESS (which the
+              // connection-state derivation relies on) and so the next run starts clean.
+              nodeContext.resetNodeStatuses(flowId);
               flowConnectionManager.setConnection(flowId, {
                 state: 'completed',
                 abortController: null,

@@ -22,6 +22,11 @@ export const backtestApi = {
     nodeContext: ReturnType<typeof useNodeContext>,
     flowId: string | null = null
   ): (() => void) => {
+    // Reset node state up-front so this backtest starts from a clean slate and never
+    // inherits the previous run's agent statuses/analysis/Done-Error results while we
+    // wait for the backend's first event.
+    nodeContext.resetAllNodes(flowId);
+
     // Create the controller for aborting the request
     const controller = new AbortController();
     const { signal } = controller;
@@ -87,8 +92,7 @@ export const backtestApi = {
                   // Process based on event type
                   switch (eventType) {
                     case 'start':
-                      // Reset all nodes at the start of a new backtest
-                      nodeContext.resetAllNodes(flowId);
+                      // Node state was already reset before the request was sent.
                       // Clear local backtest results
                       backtestResults = [];
                       // Create a backtest agent entry
@@ -224,6 +228,11 @@ export const backtestApi = {
           if (flowId) {
             const currentConnection = flowConnectionManager.getConnection(flowId);
             if (currentConnection.state === 'connected') {
+              // Stream ended without a terminal (complete/error) event - e.g. the
+              // backend closed the connection after a disconnect/cancel. Clear any node
+              // statuses left mid-flight so we don't report stale IN_PROGRESS and so the
+              // next run starts clean.
+              nodeContext.resetNodeStatuses(flowId);
               flowConnectionManager.setConnection(flowId, {
                 state: 'completed',
                 abortController: null,

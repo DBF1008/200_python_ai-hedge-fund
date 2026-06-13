@@ -41,6 +41,17 @@ class AgentProgress:
             self.live.stop()
             self.started = False
 
+    def reset(self):
+        """Clear all tracked agent state so a new run/backtest starts clean.
+
+        Only the per-run progress data (``agent_status``) is cleared; registered
+        handlers are left intact so a freshly started run keeps streaming to its
+        own subscriber. This prevents a new run from inheriting a previous run's
+        agent statuses, analyses, or terminal ("Done"/"Error") results.
+        """
+        self.agent_status.clear()
+        self._refresh_display()
+
     def update_status(self, agent_name: str, ticker: Optional[str] = None, status: str = "", analysis: Optional[str] = None):
         """Update the status of an agent."""
         if agent_name not in self.agent_status:

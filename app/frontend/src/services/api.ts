@@ -9,6 +9,34 @@ import {
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
+/**
+ * Builds a readable error message from a failed run/backtest response.
+ * The backend returns structured 400 bodies of the form
+ * { detail: { message, missing_keys: [{ provider, key_names, required_by }] } }.
+ */
+async function extractApiErrorMessage(response: Response): Promise<string> {
+  try {
+    const body = await response.json();
+    const detail = body?.detail;
+    if (detail && typeof detail === 'object') {
+      const parts: string[] = [];
+      if (detail.message) parts.push(detail.message);
+      if (Array.isArray(detail.missing_keys)) {
+        for (const key of detail.missing_keys) {
+          const names = Array.isArray(key.key_names) ? key.key_names.join(' or ') : '';
+          const requiredBy = Array.isArray(key.required_by) ? key.required_by.join(', ') : '';
+          parts.push(`• ${key.provider}: ${names}${requiredBy ? ` (needed by ${requiredBy})` : ''}`);
+        }
+      }
+      if (parts.length > 0) return parts.join('\n');
+    }
+    if (typeof detail === 'string' && detail) return detail;
+  } catch {
+    // Body was not JSON or could not be read; fall back to status.
+  }
+  return `HTTP error! status: ${response.status}`;
+}
+
 export const api = {
   /**
    * Gets the list of available agents from the backend
@@ -114,9 +142,9 @@ export const api = {
       body: JSON.stringify(backendParams),
       signal,
     })
-    .then(response => {
+    .then(async response => {
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        throw new Error(await extractApiErrorMessage(response));
       }
             
       // Process the response as a stream of SSE events

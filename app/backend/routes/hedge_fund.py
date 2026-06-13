@@ -10,6 +10,7 @@ from app.backend.services.graph import create_graph, parse_hedge_fund_response, 
 from app.backend.services.portfolio import create_portfolio
 from app.backend.services.backtest_service import BacktestService
 from app.backend.services.api_key_service import ApiKeyService
+from app.backend.services.api_key_validation import validate_request_api_keys, collect_used_key_names
 from src.utils.progress import progress
 from src.utils.analysts import get_agents_list
 
@@ -29,6 +30,18 @@ async def run(request_data: HedgeFundRequest, request: Request, db: Session = De
         if not request_data.api_keys:
             api_key_service = ApiKeyService(db)
             request_data.api_keys = api_key_service.get_api_keys_dict()
+
+        # Validate that all required API keys are present before starting the run
+        missing_keys = validate_request_api_keys(request_data)
+        if missing_keys:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error_type": "missing_api_keys",
+                    "message": "Cannot start run: missing required API key(s). Add them in Settings → API Keys.",
+                    "missing_keys": [key.model_dump() for key in missing_keys],
+                },
+            )
 
         # Create the portfolio
         portfolio = create_portfolio(request_data.initial_cash, request_data.margin_requirement, request_data.tickers, request_data.portfolio_positions)
@@ -126,6 +139,12 @@ async def run(request_data: HedgeFundRequest, request: Request, db: Session = De
                     yield ErrorEvent(message="Failed to generate hedge fund decisions").to_sse()
                     return
 
+                # Stamp last_used for the keys this run actually used (best-effort)
+                try:
+                    ApiKeyService(db).mark_keys_used(collect_used_key_names(request_data))
+                except Exception as exc:
+                    print(f"Failed to update API key last_used: {exc}")
+
                 # Send the final result
                 final_data = CompleteEvent(
                     data={
@@ -174,6 +193,18 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
         if not request_data.api_keys:
             api_key_service = ApiKeyService(db)
             request_data.api_keys = api_key_service.get_api_keys_dict()
+
+        # Validate that all required API keys are present before starting the backtest
+        missing_keys = validate_request_api_keys(request_data)
+        if missing_keys:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error_type": "missing_api_keys",
+                    "message": "Cannot start backtest: missing required API key(s). Add them in Settings → API Keys.",
+                    "missing_keys": [key.model_dump() for key in missing_keys],
+                },
+            )
 
         # Convert model_provider to string if it's an enum
         model_provider = request_data.model_provider
@@ -300,6 +331,12 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
                 if not result:
                     yield ErrorEvent(message="Failed to complete backtest").to_sse()
                     return
+
+                # Stamp last_used for the keys this backtest actually used (best-effort)
+                try:
+                    ApiKeyService(db).mark_keys_used(collect_used_key_names(request_data))
+                except Exception as exc:
+                    print(f"Failed to update API key last_used: {exc}")
 
                 # Send the final result
                 performance_metrics = BacktestPerformanceMetrics(**result["performance_metrics"])

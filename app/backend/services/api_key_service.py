@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from typing import Dict, Optional
+from typing import Dict, Iterable, Optional
 from app.backend.repositories.api_key_repository import ApiKeyRepository
 
 
@@ -20,4 +20,9 @@ class ApiKeyService:
     def get_api_key(self, provider: str) -> Optional[str]:
         """Get a specific API key by provider"""
         api_key = self.repository.get_api_key_by_provider(provider)
-        return api_key.key_value if api_key else None 
+        return api_key.key_value if api_key else None
+
+    def mark_keys_used(self, key_names: Iterable[str]) -> None:
+        """Stamp last_used for each given key (no-ops for providers not stored)."""
+        for name in key_names:
+            self.repository.update_last_used(name)

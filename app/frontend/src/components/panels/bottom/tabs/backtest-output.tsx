@@ -3,6 +3,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { cn } from '@/lib/utils';
 import { MoreHorizontal } from 'lucide-react';
 import { getActionColor } from './output-tab-utils';
+import { BacktestCharts } from './backtest-charts';
 
 // Component for displaying backtest progress
 function BacktestProgress({ agentData }: { agentData: Record<string, any> }) {
@@ -210,6 +211,22 @@ function BacktestResults({ outputData }: { outputData: any }) {
                   </span>
                 </div>
               )}
+              {performance_metrics.benchmark_return_pct !== null && performance_metrics.benchmark_return_pct !== undefined && (
+                <div className="flex justify-between">
+                  <span>SPY Return:</span>
+                  <span className={cn("font-medium", performance_metrics.benchmark_return_pct >= 0 ? "text-green-500" : "text-red-500")}>
+                    {performance_metrics.benchmark_return_pct >= 0 ? '+' : ''}{performance_metrics.benchmark_return_pct.toFixed(2)}%
+                  </span>
+                </div>
+              )}
+              {performance_metrics.alpha_pct !== null && performance_metrics.alpha_pct !== undefined && (
+                <div className="flex justify-between">
+                  <span>Alpha:</span>
+                  <span className={cn("font-medium", performance_metrics.alpha_pct >= 0 ? "text-green-500" : "text-red-500")}>
+                    {performance_metrics.alpha_pct >= 0 ? '+' : ''}{performance_metrics.alpha_pct.toFixed(2)}%
+                  </span>
+                </div>
+              )}
             </div>
           </div>
           
@@ -395,22 +412,27 @@ function BacktestPerformanceMetrics({ agentData }: { agentData: Record<string, a
 }
 
 // Main component for backtest output
-export function BacktestOutput({ 
-  agentData, 
-  outputData 
-}: { 
-  agentData: Record<string, any>; 
-  outputData: any; 
+export function BacktestOutput({
+  agentData,
+  outputData
+}: {
+  agentData: Record<string, any>;
+  outputData: any;
 }) {
   return (
     <>
       <BacktestProgress agentData={agentData} />
+      {outputData?.time_series && (
+        <BacktestCharts
+          timeSeries={outputData.time_series}
+          performanceMetrics={outputData.performance_metrics}
+        />
+      )}
       {outputData && <BacktestResults outputData={outputData} />}
       {agentData && agentData['backtest'] && (
         <BacktestPerformanceMetrics agentData={agentData} />
       )}
       <BacktestTradingTable agentData={agentData} />
-
     </>
   );
 } 

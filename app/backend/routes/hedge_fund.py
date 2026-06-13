@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 import asyncio
 
 from app.backend.database import get_db
-from app.backend.models.schemas import ErrorResponse, HedgeFundRequest, BacktestRequest, BacktestDayResult, BacktestPerformanceMetrics
+from app.backend.models.schemas import ErrorResponse, HedgeFundRequest, BacktestRequest, BacktestDayResult, BacktestPerformanceMetrics, BacktestTimeSeries
 from app.backend.models.events import StartEvent, ProgressUpdateEvent, ErrorEvent, CompleteEvent
 from app.backend.services.graph import create_graph, parse_hedge_fund_response, run_graph_async
 from app.backend.services.portfolio import create_portfolio
@@ -303,14 +303,30 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
 
                 # Send the final result
                 performance_metrics = BacktestPerformanceMetrics(**result["performance_metrics"])
-                final_data = CompleteEvent(
-                    data={
-                        "performance_metrics": performance_metrics.model_dump(),
-                        "final_portfolio": result["final_portfolio"],
-                        "total_days": len(result["results"]),
-                    }
-                )
+                complete_data = {
+                    "performance_metrics": performance_metrics.model_dump(),
+                    "final_portfolio": result["final_portfolio"],
+                    "total_days": len(result["results"]),
+                    "time_series": result.get("time_series"),
+                }
+                final_data = CompleteEvent(data=complete_data)
                 yield final_data.to_sse()
+
+                # Persist time-series + metrics to flow run if flow_id and run_id provided
+                if request_data.flow_id and request_data.run_id:
+                    try:
+                        from app.backend.repositories.flow_run_repository import FlowRunRepository
+                        run_repo = FlowRunRepository(db)
+                        run_repo.update_flow_run(
+                            run_id=request_data.run_id,
+                            results={
+                                "performance_metrics": performance_metrics.model_dump(),
+                                "time_series": result.get("time_series"),
+                                "total_days": len(result["results"]),
+                            },
+                        )
+                    except Exception as persist_err:
+                        print(f"Failed to persist backtest results to flow run: {persist_err}")
 
             except asyncio.CancelledError:
                 print("Backtest event generator cancelled")

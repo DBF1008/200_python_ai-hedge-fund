@@ -1,4 +1,5 @@
 import { LanguageModel } from '@/data/models';
+import { BacktestTimeSeries } from '@/services/types';
 import { createContext, ReactNode, useCallback, useContext, useState } from 'react';
 
 export type NodeStatus = 'IDLE' | 'IN_PROGRESS' | 'COMPLETE' | 'ERROR';
@@ -36,6 +37,8 @@ export interface OutputNodeData {
     long_short_ratio?: number;
     gross_exposure?: number;
     net_exposure?: number;
+    benchmark_return_pct?: number;
+    alpha_pct?: number;
   };
   final_portfolio?: {
     cash: number;
@@ -43,6 +46,7 @@ export interface OutputNodeData {
     positions: Record<string, any>;
   };
   total_days?: number;
+  time_series?: BacktestTimeSeries;
 }
 
 // Default agent node state

@@ -1,4 +1,5 @@
 import { Flow } from '@/types/flow';
+import { BacktestTimeSeries } from '@/services/types';
 
 const API_BASE_URL = 'http://localhost:8000';
 
@@ -104,5 +105,34 @@ export const flowService = {
       edges,
       viewport,
     });
+  },
+
+  // Get a specific flow run by ID
+  async getFlowRun(flowId: number, runId: number): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/flows/${flowId}/runs/${runId}`);
+    if (!response.ok) {
+      throw new Error('Failed to fetch flow run');
+    }
+    return response.json();
+  },
+
+  // Get all flow runs for a flow
+  async getFlowRuns(flowId: number, limit: number = 50, offset: number = 0): Promise<any[]> {
+    const response = await fetch(
+      `${API_BASE_URL}/flows/${flowId}/runs?limit=${limit}&offset=${offset}`
+    );
+    if (!response.ok) {
+      throw new Error('Failed to fetch flow runs');
+    }
+    return response.json();
+  },
+
+  // Extract time-series data from a historical flow run
+  async getFlowRunTimeSeries(flowId: number, runId: number): Promise<BacktestTimeSeries | null> {
+    const run = await this.getFlowRun(flowId, runId);
+    if (run?.results?.time_series) {
+      return run.results.time_series as BacktestTimeSeries;
+    }
+    return null;
   },
 }; 

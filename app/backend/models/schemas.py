@@ -95,6 +95,8 @@ class BacktestRequest(BaseHedgeFundRequest):
     start_date: str
     end_date: str
     initial_capital: float = 100000.0
+    flow_id: Optional[int] = None
+    run_id: Optional[int] = None
 
 
 class BacktestDayResult(BaseModel):
@@ -112,6 +114,17 @@ class BacktestDayResult(BaseModel):
     long_short_ratio: Optional[float] = None
 
 
+class BacktestTimeSeries(BaseModel):
+    """Structured time-series data for charting backtest results."""
+    dates: List[str]
+    portfolio_values: List[float]
+    benchmark_values: List[Optional[float]]
+    long_exposures: List[float]
+    short_exposures: List[float]
+    gross_exposures: List[float]
+    net_exposures: List[float]
+
+
 class BacktestPerformanceMetrics(BaseModel):
     sharpe_ratio: Optional[float] = None
     sortino_ratio: Optional[float] = None
@@ -120,12 +133,15 @@ class BacktestPerformanceMetrics(BaseModel):
     long_short_ratio: Optional[float] = None
     gross_exposure: Optional[float] = None
     net_exposure: Optional[float] = None
+    benchmark_return_pct: Optional[float] = None
+    alpha_pct: Optional[float] = None
 
 
 class BacktestResponse(BaseModel):
     results: List[BacktestDayResult]
     performance_metrics: BacktestPerformanceMetrics
     final_portfolio: Dict[str, Any]
+    time_series: Optional[BacktestTimeSeries] = None
 
 
 class HedgeFundRequest(BaseHedgeFundRequest):

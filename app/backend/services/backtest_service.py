@@ -235,6 +235,9 @@ class BacktestService:
             get_insider_trades(ticker, self.end_date, start_date=self.start_date, limit=1000, api_key=api_key)
             get_company_news(ticker, self.end_date, start_date=self.start_date, limit=1000, api_key=api_key)
 
+        # Preload SPY data for benchmark comparison
+        get_prices("SPY", self.start_date, self.end_date, api_key=api_key)
+
     def _update_performance_metrics(self, performance_metrics: Dict[str, Any]):
         """Update performance metrics using daily returns."""
         values_df = pd.DataFrame(self.portfolio_values).set_index("Date")
@@ -281,6 +284,62 @@ class BacktestService:
         else:
             performance_metrics["max_drawdown"] = 0.0
             performance_metrics["max_drawdown_date"] = None
+
+    def _build_time_series(self) -> Dict[str, Any]:
+        """Build structured time-series data for charting from portfolio_values.
+
+        Returns a dict with parallel arrays: dates, portfolio_values,
+        benchmark_values (SPY scaled to initial_capital), and exposure arrays.
+        """
+        dates: List[str] = []
+        portfolio_vals: List[float] = []
+        long_exp: List[float] = []
+        short_exp: List[float] = []
+        gross_exp: List[float] = []
+        net_exp: List[float] = []
+
+        for pv in self.portfolio_values:
+            d = pv["Date"]
+            dates.append(d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d))
+            portfolio_vals.append(float(pv["Portfolio Value"]))
+            long_exp.append(float(pv.get("Long Exposure", 0.0) or 0.0))
+            short_exp.append(float(pv.get("Short Exposure", 0.0) or 0.0))
+            gross_exp.append(float(pv.get("Gross Exposure", 0.0) or 0.0))
+            net_exp.append(float(pv.get("Net Exposure", 0.0) or 0.0))
+
+        # Build SPY benchmark curve scaled to initial_capital
+        benchmark_values: List[Optional[float]] = [None] * len(dates)
+        try:
+            api_key = self.request.api_keys.get("FINANCIAL_DATASETS_API_KEY") if hasattr(self.request, "api_keys") and self.request.api_keys else None
+            spy_df = get_price_data("SPY", self.start_date, self.end_date, api_key=api_key)
+            if not spy_df.empty and len(dates) > 0:
+                spy_df = spy_df.copy()
+                spy_df.index = pd.to_datetime(spy_df.index)
+                spy_close = spy_df["close"].dropna()
+
+                first_date = pd.Timestamp(dates[0])
+                first_valid = spy_close[spy_close.index >= first_date]
+                if not first_valid.empty:
+                    spy_start_price = float(first_valid.iloc[0])
+                    if spy_start_price > 0:
+                        scale = self.initial_capital / spy_start_price
+                        for i, date_str in enumerate(dates):
+                            ts = pd.Timestamp(date_str)
+                            valid = spy_close[spy_close.index <= ts]
+                            if not valid.empty:
+                                benchmark_values[i] = round(float(valid.iloc[-1]) * scale, 2)
+        except Exception:
+            pass
+
+        return {
+            "dates": dates,
+            "portfolio_values": [round(v, 2) for v in portfolio_vals],
+            "benchmark_values": benchmark_values,
+            "long_exposures": [round(v, 2) for v in long_exp],
+            "short_exposures": [round(v, 2) for v in short_exp],
+            "gross_exposures": [round(v, 2) for v in gross_exp],
+            "net_exposures": [round(v, 2) for v in net_exp],
+        }
 
     async def run_backtest_async(self, progress_callback: Optional[Callable] = None) -> Dict[str, Any]:
         """
@@ -504,11 +563,25 @@ class BacktestService:
         # Store final performance metrics
         self.performance_metrics = performance_metrics
 
+        # Build time-series data for charting
+        time_series = self._build_time_series()
+
+        # Compute benchmark return and alpha
+        benchmark_vals = time_series.get("benchmark_values", [])
+        valid_benchmark = [v for v in benchmark_vals if v is not None]
+        if len(valid_benchmark) >= 2:
+            benchmark_return = (valid_benchmark[-1] / valid_benchmark[0] - 1) * 100
+            performance_metrics["benchmark_return_pct"] = round(benchmark_return, 2)
+            # Alpha = portfolio return - benchmark return
+            portfolio_return = (time_series["portfolio_values"][-1] / time_series["portfolio_values"][0] - 1) * 100 if time_series["portfolio_values"][0] > 0 else 0
+            performance_metrics["alpha_pct"] = round(portfolio_return - benchmark_return, 2)
+
         return {
             "results": backtest_results,
             "performance_metrics": performance_metrics,
             "portfolio_values": self.portfolio_values,
             "final_portfolio": self.portfolio,
+            "time_series": time_series,
         }
 
     def run_backtest_sync(self) -> Dict[str, Any]:

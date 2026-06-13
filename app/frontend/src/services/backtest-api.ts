@@ -4,7 +4,8 @@ import { flowConnectionManager } from '@/hooks/use-flow-connection';
 import {
   BacktestDayResult,
   BacktestPerformanceMetrics,
-  BacktestRequest
+  BacktestRequest,
+  BacktestTimeSeries
 } from '@/services/types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -132,8 +133,8 @@ export const backtestApi = {
                         if (eventData.analysis) {
                           try {
                             const backtestResultData = JSON.parse(eventData.analysis);
-                            // Add to local array and keep only the last 50 results to avoid memory issues
-                            backtestResults = [...backtestResults, backtestResultData].slice(-50);
+                            // Add to local array (no cap — full history needed for charts)
+                            backtestResults = [...backtestResults, backtestResultData];
                           } catch (error) {
                             console.error('Error parsing backtest result data:', error);
                           }
@@ -157,6 +158,7 @@ export const backtestApi = {
                           performance_metrics: eventData.data.performance_metrics,
                           final_portfolio: eventData.data.final_portfolio,
                           total_days: eventData.data.total_days,
+                          time_series: eventData.data.time_series,
                         };
                         
                         nodeContext.setOutputNodeData(flowId, backtestResults);
@@ -287,4 +289,4 @@ export const backtestApi = {
   },
 };
 
-export type { BacktestDayResult, BacktestPerformanceMetrics, BacktestRequest };
+export type { BacktestDayResult, BacktestPerformanceMetrics, BacktestRequest, BacktestTimeSeries };

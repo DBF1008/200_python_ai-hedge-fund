@@ -55,6 +55,8 @@ export interface BacktestRequest extends BaseHedgeFundRequest {
   start_date: string;
   end_date: string;
   initial_capital?: number;
+  flow_id?: number;
+  run_id?: number;
 }
 
 export interface BacktestDayResult {
@@ -80,4 +82,16 @@ export interface BacktestPerformanceMetrics {
   long_short_ratio?: number;
   gross_exposure?: number;
   net_exposure?: number;
+  benchmark_return_pct?: number;
+  alpha_pct?: number;
+}
+
+export interface BacktestTimeSeries {
+  dates: string[];
+  portfolio_values: number[];
+  benchmark_values: (number | null)[];
+  long_exposures: number[];
+  short_exposures: number[];
+  gross_exposures: number[];
+  net_exposures: number[];
 } 

@@ -1,9 +1,19 @@
 // Shared types for API requests and responses
 export enum ModelProvider {
-  OPENAI = 'OpenAI',
+  ALIBABA = 'Alibaba',
   ANTHROPIC = 'Anthropic',
+  AZURE_OPENAI = 'Azure OpenAI',
+  DEEPSEEK = 'DeepSeek',
+  GIGACHAT = 'GigaChat',
+  GOOGLE = 'Google',
   GROQ = 'Groq',
+  KIMI = 'Kimi',
+  META = 'Meta',
+  MISTRAL = 'Mistral',
   OLLAMA = 'Ollama',
+  OPENAI = 'OpenAI',
+  OPENROUTER = 'OpenRouter',
+  XAI = 'xAI',
 }
 
 export interface AgentModelConfig {

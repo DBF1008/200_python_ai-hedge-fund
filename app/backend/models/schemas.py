@@ -57,6 +57,20 @@ class ErrorResponse(BaseModel):
     error: str | None = None
 
 
+class MissingKeyDetail(BaseModel):
+    """Details about a single missing API key."""
+    key_name: str           # e.g. "ANTHROPIC_API_KEY"
+    provider: str           # e.g. "Anthropic"
+    required_by: List[str]  # display names of agents that need this key
+    reason: str             # human-readable explanation
+
+
+class ApiKeyPreCheckError(BaseModel):
+    """Structured error returned when pre-execution API key validation fails."""
+    message: str  # e.g. "Missing required API keys for execution"
+    missing_keys: List[MissingKeyDetail]
+
+
 # Base class for shared fields between HedgeFundRequest and BacktestRequest
 class BaseHedgeFundRequest(BaseModel):
     tickers: List[str]

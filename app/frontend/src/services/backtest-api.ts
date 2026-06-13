@@ -6,6 +6,7 @@ import {
   BacktestPerformanceMetrics,
   BacktestRequest
 } from '@/services/types';
+import { handleApiPreCheckError } from '@/utils/api-error';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -35,8 +36,10 @@ export const backtestApi = {
       body: JSON.stringify(params),
       signal,
     })
-    .then(response => {
+    .then(async response => {
       if (!response.ok) {
+        // Try to parse structured pre-check error (422) and show toast
+        await handleApiPreCheckError(response);
         throw new Error(`HTTP error! status: ${response.status}`);
       }
             

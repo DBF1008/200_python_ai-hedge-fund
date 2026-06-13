@@ -4,22 +4,56 @@ from sqlalchemy.orm import Session
 import asyncio
 
 from app.backend.database import get_db
-from app.backend.models.schemas import ErrorResponse, HedgeFundRequest, BacktestRequest, BacktestDayResult, BacktestPerformanceMetrics
+from app.backend.models.schemas import (
+    ErrorResponse, HedgeFundRequest, BacktestRequest,
+    BacktestDayResult, BacktestPerformanceMetrics,
+    ApiKeyPreCheckError, MissingKeyDetail,
+)
 from app.backend.models.events import StartEvent, ProgressUpdateEvent, ErrorEvent, CompleteEvent
 from app.backend.services.graph import create_graph, parse_hedge_fund_response, run_graph_async
 from app.backend.services.portfolio import create_portfolio
 from app.backend.services.backtest_service import BacktestService
 from app.backend.services.api_key_service import ApiKeyService
+from app.backend.services.api_key_validator import validate_api_keys
 from src.utils.progress import progress
 from src.utils.analysts import get_agents_list
 
 router = APIRouter(prefix="/hedge-fund")
+
+
+def _run_api_key_precheck(request_data, api_keys: dict | None) -> set[str]:
+    """
+    Validate API key dependencies before execution.
+
+    Raises ``HTTPException(422)`` with a structured ``ApiKeyPreCheckError``
+    body when required keys are missing.
+
+    Returns the set of key names that will be used during execution
+    (for ``last_used`` tracking after successful completion).
+    """
+    result = validate_api_keys(request_data, api_keys)
+    if not result.is_valid:
+        detail = ApiKeyPreCheckError(
+            message="Missing required API keys for execution",
+            missing_keys=[
+                MissingKeyDetail(
+                    key_name=mk.key_name,
+                    provider=mk.provider,
+                    required_by=mk.required_by,
+                    reason=mk.reason,
+                )
+                for mk in result.missing_keys
+            ],
+        ).model_dump()
+        raise HTTPException(status_code=422, detail=detail)
+    return result.used_key_names
 
 @router.post(
     path="/run",
     responses={
         200: {"description": "Successful response with streaming updates"},
         400: {"model": ErrorResponse, "description": "Invalid request parameters"},
+        422: {"model": ApiKeyPreCheckError, "description": "Missing required API keys"},
         500: {"model": ErrorResponse, "description": "Internal server error"},
     },
 )
@@ -29,6 +63,9 @@ async def run(request_data: HedgeFundRequest, request: Request, db: Session = De
         if not request_data.api_keys:
             api_key_service = ApiKeyService(db)
             request_data.api_keys = api_key_service.get_api_keys_dict()
+
+        # Pre-check: validate that all required API keys are available
+        used_key_names = _run_api_key_precheck(request_data, request_data.api_keys)
 
         # Create the portfolio
         portfolio = create_portfolio(request_data.initial_cash, request_data.margin_requirement, request_data.tickers, request_data.portfolio_positions)
@@ -136,6 +173,15 @@ async def run(request_data: HedgeFundRequest, request: Request, db: Session = De
                 )
                 yield final_data.to_sse()
 
+                # Update last_used for all API keys that were used during execution
+                if used_key_names:
+                    try:
+                        api_key_service = ApiKeyService(db)
+                        api_key_service.update_last_used_bulk(list(used_key_names))
+                    except Exception as e:
+                        # Non-fatal: log but do not break the response
+                        print(f"Warning: failed to update last_used for API keys: {e}")
+
             except asyncio.CancelledError:
                 print("Event generator cancelled")
                 return
@@ -164,6 +210,7 @@ async def run(request_data: HedgeFundRequest, request: Request, db: Session = De
     responses={
         200: {"description": "Successful response with streaming backtest updates"},
         400: {"model": ErrorResponse, "description": "Invalid request parameters"},
+        422: {"model": ApiKeyPreCheckError, "description": "Missing required API keys"},
         500: {"model": ErrorResponse, "description": "Internal server error"},
     },
 )
@@ -174,6 +221,9 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
         if not request_data.api_keys:
             api_key_service = ApiKeyService(db)
             request_data.api_keys = api_key_service.get_api_keys_dict()
+
+        # Pre-check: validate that all required API keys are available
+        used_key_names = _run_api_key_precheck(request_data, request_data.api_keys)
 
         # Convert model_provider to string if it's an enum
         model_provider = request_data.model_provider
@@ -311,6 +361,15 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
                     }
                 )
                 yield final_data.to_sse()
+
+                # Update last_used for all API keys that were used during execution
+                if used_key_names:
+                    try:
+                        api_key_service = ApiKeyService(db)
+                        api_key_service.update_last_used_bulk(list(used_key_names))
+                    except Exception as e:
+                        # Non-fatal: log but do not break the response
+                        print(f"Warning: failed to update last_used for API keys: {e}")
 
             except asyncio.CancelledError:
                 print("Backtest event generator cancelled")

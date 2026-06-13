@@ -128,4 +128,22 @@ class ApiKeyRepository:
                 is_active=data.get('is_active', True)
             )
             results.append(api_key)
-        return results 
+        return results
+
+    def update_last_used_bulk(self, providers: List[str]) -> int:
+        """
+        Update the last_used timestamp for multiple API keys in a single query.
+
+        Returns the number of rows actually updated.
+        """
+        if not providers:
+            return 0
+        updated = self.db.query(ApiKey).filter(
+            ApiKey.provider.in_(providers),
+            ApiKey.is_active == True,
+        ).update(
+            {ApiKey.last_used: func.now()},
+            synchronize_session="fetch",
+        )
+        self.db.commit()
+        return updated 

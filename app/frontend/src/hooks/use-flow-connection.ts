@@ -190,7 +190,7 @@ export function useFlowConnection(flowId: string | null) {
     console.log(`[stopFlow] Stopping flow ${flowId}`);
     const connection = flowConnectionManager.getConnection(flowId);
     console.log(`[stopFlow] Current connection state:`, connection);
-    
+
     if (connection.abortController) {
       console.log(`[stopFlow] Calling abort controller for flow ${flowId}`);
       connection.abortController();
@@ -198,15 +198,18 @@ export function useFlowConnection(flowId: string | null) {
       console.log(`[stopFlow] No abort controller found for flow ${flowId}`);
     }
 
-    // Reset only node statuses when stopping, preserving all data (backtest results, messages, etc.)
-    nodeContext.resetNodeStatuses(flowId);
+    // Fully reset all node data for this flow so the next run starts from a
+    // clean slate.  The abort callback inside api.ts / backtest-api.ts also
+    // calls resetAllNodes, but calling it here is idempotent and guarantees
+    // cleanup even when stopFlow is invoked without a prior abort.
+    nodeContext.resetAllNodes(flowId);
 
     // Update connection state
     flowConnectionManager.setConnection(flowId, {
       state: 'idle',
       abortController: null,
     });
-    
+
     console.log(`[stopFlow] Flow ${flowId} stopped and reset to idle`);
   }, [flowId, nodeContext]);
 
@@ -215,21 +218,27 @@ export function useFlowConnection(flowId: string | null) {
     if (!flowId) return;
 
     const connection = flowConnectionManager.getConnection(flowId);
-    
-    // If we think we're connected but have no processing nodes, we're probably stale
-    if ((connection.state === 'connected' || connection.state === 'connecting') && !isProcessing) {
-      // Check if the connection is old (more than 5 minutes)
-      const isStale = Date.now() - connection.lastActivity > 5 * 60 * 1000;
-      
-      if (isStale) {
-        console.log(`Recovering stale connection for flow ${flowId}`);
-        flowConnectionManager.setConnection(flowId, {
-          state: 'idle',
-          abortController: null,
-        });
-      }
+
+    // If we think we're connected/connecting/completed/error but have no
+    // processing nodes, the in-memory connection state is stale (e.g. after
+    // an abort, tab switch, or page navigation).  Reset to idle immediately
+    // so the user can start a new run without waiting.
+    if (
+      (connection.state === 'connected' ||
+        connection.state === 'connecting' ||
+        connection.state === 'completed' ||
+        connection.state === 'error') &&
+      !isProcessing
+    ) {
+      console.log(`Recovering stale connection for flow ${flowId} (state=${connection.state})`);
+      // Reset node data to ensure no stale progress is visible
+      nodeContext.resetAllNodes(flowId);
+      flowConnectionManager.setConnection(flowId, {
+        state: 'idle',
+        abortController: null,
+      });
     }
-  }, [flowId, isProcessing]);
+  }, [flowId, isProcessing, nodeContext]);
 
   return {
     // State

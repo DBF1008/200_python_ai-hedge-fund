@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 import asyncio
+import uuid
 
 from app.backend.database import get_db
 from app.backend.models.schemas import ErrorResponse, HedgeFundRequest, BacktestRequest, BacktestDayResult, BacktestPerformanceMetrics
@@ -40,8 +41,22 @@ async def run(request_data: HedgeFundRequest, request: Request, db: Session = De
         )
         graph = graph.compile()
 
-        # Log a test progress update for debugging
-        progress.update_status("system", None, "Preparing hedge fund run")
+        # --- Run isolation: start a new run and register agents ----------
+        run_id = progress.start_run()
+        agent_ids = [node.id for node in request_data.graph_nodes]
+        progress.register_agents_for_run(agent_ids, run_id)
+        # Also register auto-created risk_management / portfolio_manager IDs
+        # (they share the suffix of their portfolio_manager node)
+        for node_id in agent_ids:
+            parts = node_id.rsplit("_", 1)
+            if len(parts) == 2 and len(parts[1]) == 6:
+                suffix = parts[1]
+                progress.register_agents_for_run(
+                    [f"risk_management_agent_{suffix}", f"portfolio_manager_{suffix}"],
+                    run_id,
+                )
+        # Register the synthetic "system" agent used for pre-run status
+        progress.register_agents_for_run(["system"], run_id)
 
         # Convert model_provider to string if it's an enum
         model_provider = request_data.model_provider
@@ -66,15 +81,18 @@ async def run(request_data: HedgeFundRequest, request: Request, db: Session = De
             run_task = None
             disconnect_task = None
 
-            # Simple handler to add updates to the queue
+            # Handler scoped to this run — only receives events from this run
             def progress_handler(agent_name, ticker, status, analysis, timestamp):
                 event = ProgressUpdateEvent(agent=agent_name, ticker=ticker, status=status, timestamp=timestamp, analysis=analysis)
                 progress_queue.put_nowait(event)
 
-            # Register our handler with the progress tracker
-            progress.register_handler(progress_handler)
+            # Register our handler with the progress tracker, scoped to run_id
+            progress.register_handler(progress_handler, run_id=run_id)
 
             try:
+                # Log a test progress update (now scoped to this run)
+                progress.update_status("system", None, "Preparing hedge fund run")
+
                 # Start the graph execution in a background task
                 run_task = asyncio.create_task(
                     run_graph_async(
@@ -88,10 +106,10 @@ async def run(request_data: HedgeFundRequest, request: Request, db: Session = De
                         request=request_data,  # Pass the full request for agent-specific model access
                     )
                 )
-                
+
                 # Start the disconnect detection task
                 disconnect_task = asyncio.create_task(wait_for_disconnect())
-                
+
                 # Send initial message
                 yield StartEvent().to_sse()
 
@@ -140,8 +158,9 @@ async def run(request_data: HedgeFundRequest, request: Request, db: Session = De
                 print("Event generator cancelled")
                 return
             finally:
-                # Clean up
-                progress.unregister_handler(progress_handler)
+                # Clean up: unregister handler and end the run
+                progress.unregister_handler(progress_handler, run_id=run_id)
+                progress.end_run(run_id)
                 if run_task and not run_task.done():
                     run_task.cancel()
                     try:
@@ -182,9 +201,9 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
 
         # Create the portfolio (same as /run endpoint)
         portfolio = create_portfolio(
-            request_data.initial_capital, 
-            request_data.margin_requirement, 
-            request_data.tickers, 
+            request_data.initial_capital,
+            request_data.margin_requirement,
+            request_data.tickers,
             request_data.portfolio_positions
         )
 
@@ -205,6 +224,20 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
             request=request_data,  # Pass the full request for agent-specific model access
         )
 
+        # --- Run isolation: start a new run and register agents ----------
+        run_id = progress.start_run()
+        agent_ids = [node.id for node in request_data.graph_nodes]
+        progress.register_agents_for_run(agent_ids, run_id)
+        for node_id in agent_ids:
+            parts = node_id.rsplit("_", 1)
+            if len(parts) == 2 and len(parts[1]) == 6:
+                suffix = parts[1]
+                progress.register_agents_for_run(
+                    [f"risk_management_agent_{suffix}", f"portfolio_manager_{suffix}"],
+                    run_id,
+                )
+        progress.register_agents_for_run(["backtest", "system"], run_id)
+
         # Function to detect client disconnection
         async def wait_for_disconnect():
             """Wait for client disconnect and return True when it happens"""
@@ -222,7 +255,7 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
             backtest_task = None
             disconnect_task = None
 
-            # Global progress handler to capture individual agent updates during backtest
+            # Handler scoped to this run
             def progress_handler(agent_name, ticker, status, analysis, timestamp):
                 event = ProgressUpdateEvent(agent=agent_name, ticker=ticker, status=status, timestamp=timestamp, analysis=analysis)
                 progress_queue.put_nowait(event)
@@ -241,11 +274,11 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
                 elif update["type"] == "backtest_result":
                     # Convert day result to a streaming event
                     backtest_result = BacktestDayResult(**update["data"])
-                    
+
                     # Send the full day result data as JSON in the analysis field
                     import json
                     analysis_data = json.dumps(update["data"])
-                    
+
                     event = ProgressUpdateEvent(
                         agent="backtest",
                         ticker=None,
@@ -255,18 +288,18 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
                     )
                     progress_queue.put_nowait(event)
 
-            # Register our handler with the progress tracker to capture agent updates
-            progress.register_handler(progress_handler)
-            
+            # Register our handler with the progress tracker, scoped to run_id
+            progress.register_handler(progress_handler, run_id=run_id)
+
             try:
                 # Start the backtest in a background task
                 backtest_task = asyncio.create_task(
                     backtest_service.run_backtest_async(progress_callback=progress_callback)
                 )
-                
+
                 # Start the disconnect detection task
                 disconnect_task = asyncio.create_task(wait_for_disconnect())
-                
+
                 # Send initial message
                 yield StartEvent().to_sse()
 
@@ -316,8 +349,9 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
                 print("Backtest event generator cancelled")
                 return
             finally:
-                # Clean up
-                progress.unregister_handler(progress_handler)
+                # Clean up: unregister handler and end the run
+                progress.unregister_handler(progress_handler, run_id=run_id)
+                progress.end_run(run_id)
                 if backtest_task and not backtest_task.done():
                     backtest_task.cancel()
                     try:
@@ -349,4 +383,3 @@ async def get_agents():
         return {"agents": get_agents_list()}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to retrieve agents: {str(e)}")
-

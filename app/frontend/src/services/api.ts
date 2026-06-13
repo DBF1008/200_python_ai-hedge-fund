@@ -247,11 +247,13 @@ export const api = {
           
           // After the stream has finished, check if we are still in a connected state.
           // This can happen if the backend closes the connection without sending a 'complete' event.
+          // Go directly to 'idle' so the user can re-run immediately.
           if (flowId) {
             const currentConnection = flowConnectionManager.getConnection(flowId);
             if (currentConnection.state === 'connected') {
+              nodeContext.resetAllNodes(flowId);
               flowConnectionManager.setConnection(flowId, {
-                state: 'completed',
+                state: 'idle',
                 abortController: null,
               });
             }
@@ -297,8 +299,10 @@ export const api = {
     // Return abort function
     return () => {
       controller.abort();
-      // Update connection state when manually aborted
+      // On manual abort, reset all node data AND connection state so a
+      // subsequent run starts from a completely clean slate.
       if (flowId) {
+        nodeContext.resetAllNodes(flowId);
         flowConnectionManager.setConnection(flowId, {
           state: 'idle',
           abortController: null,

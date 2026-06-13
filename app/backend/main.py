@@ -2,10 +2,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import logging
 import asyncio
+from datetime import datetime
 
 from app.backend.routes import api_router
-from app.backend.database.connection import engine
-from app.backend.database.models import Base
+from app.backend.database.connection import engine, SessionLocal
+from app.backend.database.models import Base, HedgeFundFlowRun
+from app.backend.models.schemas import FlowRunStatus
 from app.backend.services.ollama_service import ollama_service
 
 # Configure logging
@@ -31,7 +33,27 @@ app.include_router(api_router)
 
 @app.on_event("startup")
 async def startup_event():
-    """Startup event to check Ollama availability."""
+    """Startup event to check Ollama availability and clean up stale runs."""
+    # Clean up any IN_PROGRESS runs that were interrupted by a server restart
+    try:
+        db = SessionLocal()
+        stale_runs = db.query(HedgeFundFlowRun).filter(
+            HedgeFundFlowRun.status == FlowRunStatus.IN_PROGRESS.value
+        ).all()
+
+        for run in stale_runs:
+            run.status = FlowRunStatus.ERROR.value
+            run.error_message = "Server restarted while run was in progress"
+            run.completed_at = datetime.utcnow()
+
+        if stale_runs:
+            db.commit()
+            logger.info(f"Marked {len(stale_runs)} stale IN_PROGRESS runs as ERROR")
+        db.close()
+    except Exception as e:
+        logger.warning(f"Failed to cleanup stale runs: {e}")
+
+    # Check Ollama availability
     try:
         logger.info("Checking Ollama availability...")
         status = await ollama_service.check_ollama_status()

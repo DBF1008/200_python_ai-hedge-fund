@@ -1,5 +1,5 @@
 import { useFlowContext } from '@/contexts/flow-context';
-import { useNodeContext } from '@/contexts/node-context';
+import { OutputNodeData, useNodeContext } from '@/contexts/node-context';
 import {
     getNodeInternalState,
     setNodeInternalState,
@@ -15,7 +15,7 @@ import { useCallback } from 'react';
  */
 export function useEnhancedFlowActions() {
   const { saveCurrentFlow, loadFlow, reactFlowInstance, currentFlowId } = useFlowContext();
-  const { exportNodeContextData } = useNodeContext();
+  const { exportNodeContextData, importNodeContextData, updateAgentNode } = useNodeContext();
 
   // Enhanced save that includes node context data
   const saveCurrentFlowWithCompleteState = useCallback(async (name?: string, description?: string): Promise<Flow | null> => {
@@ -76,7 +76,7 @@ export function useEnhancedFlowActions() {
     try {
       // First, set the flow ID for node state isolation
       setNodeStateFlowId(flow.id.toString());
-      
+
       // DO NOT clear configuration state when loading flows - useNodeState handles flow isolation automatically
       // DO NOT reset runtime data when loading flows - preserve all runtime state
       // Runtime data should only be reset when explicitly starting a new run via the Play button
@@ -93,17 +93,50 @@ export function useEnhancedFlowActions() {
           }
         });
       }
-      
-      // NOTE: We intentionally do NOT restore nodeContextData here
-      // Runtime execution data (messages, analysis, agent status) should start fresh
-      // Only configuration data (tickers, model selections) is restored above
+
+      // Query the latest run and restore output data if complete
+      const flowIdStr = flow.id.toString();
+      try {
+        const latestRun = await flowService.getLatestFlowRun(flow.id);
+
+        if (latestRun?.status === 'COMPLETE' && latestRun.results) {
+          // Restore output node data from the persisted run results
+          const outputData: OutputNodeData = {
+            decisions: latestRun.results.decisions || {},
+            analyst_signals: latestRun.results.analyst_signals || {},
+            // Backtest-specific fields (may be present)
+            performance_metrics: latestRun.results.performance_metrics,
+            final_portfolio: latestRun.results.final_portfolio,
+            total_days: latestRun.results.total_days,
+          };
+
+          importNodeContextData(flowIdStr, {
+            outputNodeData: outputData,
+          });
+
+          // Mark output node as complete so UI shows the restored results
+          updateAgentNode(flowIdStr, 'output', {
+            status: 'COMPLETE',
+            message: `Restored from run #${latestRun.run_number}`,
+          });
+
+          console.log(`Restored output data from flow run #${latestRun.run_number}`);
+        } else if (latestRun?.status === 'IN_PROGRESS') {
+          // The run was in progress when the server stopped (crash, restart, etc.)
+          // It's stale — don't try to reconnect
+          console.log(`Flow has a stale IN_PROGRESS run (#${latestRun.run_number}). The server-side task is no longer running.`);
+        }
+      } catch (err) {
+        console.warn('Failed to query latest flow run (non-critical):', err);
+        // Don't throw — flow loading should still succeed even if run query fails
+      }
 
       console.log('Flow loaded with complete state restoration:', flow.name);
     } catch (error) {
       console.error('Failed to load flow with complete state:', error);
       throw error;
     }
-  }, [loadFlow]);
+  }, [loadFlow, importNodeContextData, updateAgentNode]);
 
   return {
     saveCurrentFlowWithCompleteState,

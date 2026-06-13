@@ -68,6 +68,7 @@ class BaseHedgeFundRequest(BaseModel):
     margin_requirement: float = 0.0
     portfolio_positions: Optional[List[PortfolioPosition]] = None
     api_keys: Optional[Dict[str, str]] = None
+    flow_id: Optional[int] = None  # Set when running a saved flow; None for ad-hoc runs
 
     def get_agent_ids(self) -> List[str]:
         """Extract agent IDs from graph structure"""
@@ -213,11 +214,14 @@ class FlowRunResponse(BaseModel):
     flow_id: int
     status: FlowRunStatus
     run_number: int
+    trading_mode: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime]
     started_at: Optional[datetime]
     completed_at: Optional[datetime]
     request_data: Optional[Dict[str, Any]]
+    initial_portfolio: Optional[Dict[str, Any]] = None
+    final_portfolio: Optional[Dict[str, Any]] = None
     results: Optional[Dict[str, Any]]
     error_message: Optional[str]
 

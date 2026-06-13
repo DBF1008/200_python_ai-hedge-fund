@@ -43,6 +43,7 @@ export interface BaseHedgeFundRequest {
   model_provider?: ModelProvider;
   margin_requirement?: number;
   portfolio_positions?: PortfolioPosition[];
+  flow_id?: number;  // Set when running a saved flow
 }
 
 export interface HedgeFundRequest extends BaseHedgeFundRequest {

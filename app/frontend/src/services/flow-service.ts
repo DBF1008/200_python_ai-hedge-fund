@@ -24,6 +24,23 @@ export interface UpdateFlowRequest {
   tags?: string[];
 }
 
+export interface FlowRunResponse {
+  id: number;
+  flow_id: number;
+  status: 'IDLE' | 'IN_PROGRESS' | 'COMPLETE' | 'ERROR';
+  run_number: number;
+  trading_mode?: string;
+  created_at: string;
+  updated_at?: string;
+  started_at?: string;
+  completed_at?: string;
+  request_data?: Record<string, any>;
+  initial_portfolio?: Record<string, any>;
+  final_portfolio?: Record<string, any>;
+  results?: Record<string, any>;
+  error_message?: string;
+}
+
 export const flowService = {
   // Get all flows
   async getFlows(): Promise<Flow[]> {
@@ -104,5 +121,36 @@ export const flowService = {
       edges,
       viewport,
     });
+  },
+
+  // Get the latest flow run
+  async getLatestFlowRun(flowId: number): Promise<FlowRunResponse | null> {
+    const response = await fetch(`${API_BASE_URL}/flows/${flowId}/runs/latest`);
+    if (!response.ok) {
+      if (response.status === 404) return null;
+      throw new Error('Failed to fetch latest flow run');
+    }
+    return response.json();
+  },
+
+  // Get the active (in-progress) flow run
+  async getActiveFlowRun(flowId: number): Promise<FlowRunResponse | null> {
+    const response = await fetch(`${API_BASE_URL}/flows/${flowId}/runs/active`);
+    if (!response.ok) {
+      if (response.status === 404) return null;
+      throw new Error('Failed to fetch active flow run');
+    }
+    return response.json();
+  },
+
+  // Get all flow runs (for history display)
+  async getFlowRuns(flowId: number, limit: number = 10): Promise<FlowRunResponse[]> {
+    const response = await fetch(
+      `${API_BASE_URL}/flows/${flowId}/runs/?limit=${limit}`
+    );
+    if (!response.ok) {
+      throw new Error('Failed to fetch flow runs');
+    }
+    return response.json();
   },
 }; 

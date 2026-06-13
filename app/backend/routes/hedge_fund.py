@@ -10,6 +10,7 @@ from app.backend.services.graph import create_graph, parse_hedge_fund_response, 
 from app.backend.services.portfolio import create_portfolio
 from app.backend.services.backtest_service import BacktestService
 from app.backend.services.api_key_service import ApiKeyService
+from app.backend.services.flow_run_tracker import FlowRunTracker
 from src.utils.progress import progress
 from src.utils.analysts import get_agents_list
 
@@ -48,6 +49,10 @@ async def run(request_data: HedgeFundRequest, request: Request, db: Session = De
         if hasattr(model_provider, "value"):
             model_provider = model_provider.value
 
+        # Prepare flow run tracker data
+        flow_id = request_data.flow_id
+        tracker_request_data = request_data.model_dump(exclude={"api_keys", "flow_id"})
+
         # Function to detect client disconnection
         async def wait_for_disconnect():
             """Wait for client disconnect and return True when it happens"""
@@ -65,6 +70,9 @@ async def run(request_data: HedgeFundRequest, request: Request, db: Session = De
             progress_queue = asyncio.Queue()
             run_task = None
             disconnect_task = None
+
+            # Create flow run tracker (uses its own DB session)
+            tracker = FlowRunTracker(flow_id=flow_id, request_data=tracker_request_data)
 
             # Simple handler to add updates to the queue
             def progress_handler(agent_name, ticker, status, analysis, timestamp):
@@ -88,10 +96,13 @@ async def run(request_data: HedgeFundRequest, request: Request, db: Session = De
                         request=request_data,  # Pass the full request for agent-specific model access
                     )
                 )
-                
+
                 # Start the disconnect detection task
                 disconnect_task = asyncio.create_task(wait_for_disconnect())
-                
+
+                # Track run start in database
+                tracker.mark_started()
+
                 # Send initial message
                 yield StartEvent().to_sse()
 
@@ -100,6 +111,7 @@ async def run(request_data: HedgeFundRequest, request: Request, db: Session = De
                     # Check if client disconnected
                     if disconnect_task.done():
                         print("Client disconnected, cancelling hedge fund execution")
+                        tracker.mark_error("Client disconnected")
                         run_task.cancel()
                         try:
                             await run_task
@@ -120,26 +132,40 @@ async def run(request_data: HedgeFundRequest, request: Request, db: Session = De
                     result = await run_task
                 except asyncio.CancelledError:
                     print("Task was cancelled")
+                    tracker.mark_error("Execution was cancelled")
                     return
 
                 if not result or not result.get("messages"):
-                    yield ErrorEvent(message="Failed to generate hedge fund decisions").to_sse()
+                    error_msg = "Failed to generate hedge fund decisions"
+                    tracker.mark_error(error_msg)
+                    yield ErrorEvent(message=error_msg).to_sse()
                     return
 
+                # Build the final data
+                final_data_dict = {
+                    "decisions": parse_hedge_fund_response(result.get("messages", [])[-1].content),
+                    "analyst_signals": result.get("data", {}).get("analyst_signals", {}),
+                    "current_prices": result.get("data", {}).get("current_prices", {}),
+                }
+
+                # Persist results to database
+                tracker.mark_complete(results=final_data_dict)
+
                 # Send the final result
-                final_data = CompleteEvent(
-                    data={
-                        "decisions": parse_hedge_fund_response(result.get("messages", [])[-1].content),
-                        "analyst_signals": result.get("data", {}).get("analyst_signals", {}),
-                        "current_prices": result.get("data", {}).get("current_prices", {}),
-                    }
-                )
+                final_data = CompleteEvent(data=final_data_dict)
                 yield final_data.to_sse()
 
             except asyncio.CancelledError:
                 print("Event generator cancelled")
+                tracker.mark_error("Event generator cancelled")
                 return
+            except Exception as e:
+                print(f"Unexpected error in event generator: {e}")
+                tracker.mark_error(str(e))
+                yield ErrorEvent(message=str(e)).to_sse()
             finally:
+                # Close tracker DB session
+                tracker.close()
                 # Clean up
                 progress.unregister_handler(progress_handler)
                 if run_task and not run_task.done():
@@ -180,11 +206,15 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
         if hasattr(model_provider, "value"):
             model_provider = model_provider.value
 
+        # Prepare flow run tracker data
+        flow_id = request_data.flow_id
+        tracker_request_data = request_data.model_dump(exclude={"api_keys", "flow_id"})
+
         # Create the portfolio (same as /run endpoint)
         portfolio = create_portfolio(
-            request_data.initial_capital, 
-            request_data.margin_requirement, 
-            request_data.tickers, 
+            request_data.initial_capital,
+            request_data.margin_requirement,
+            request_data.tickers,
             request_data.portfolio_positions
         )
 
@@ -222,6 +252,9 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
             backtest_task = None
             disconnect_task = None
 
+            # Create flow run tracker (uses its own DB session)
+            tracker = FlowRunTracker(flow_id=flow_id, request_data=tracker_request_data)
+
             # Global progress handler to capture individual agent updates during backtest
             def progress_handler(agent_name, ticker, status, analysis, timestamp):
                 event = ProgressUpdateEvent(agent=agent_name, ticker=ticker, status=status, timestamp=timestamp, analysis=analysis)
@@ -241,11 +274,11 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
                 elif update["type"] == "backtest_result":
                     # Convert day result to a streaming event
                     backtest_result = BacktestDayResult(**update["data"])
-                    
+
                     # Send the full day result data as JSON in the analysis field
                     import json
                     analysis_data = json.dumps(update["data"])
-                    
+
                     event = ProgressUpdateEvent(
                         agent="backtest",
                         ticker=None,
@@ -257,16 +290,19 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
 
             # Register our handler with the progress tracker to capture agent updates
             progress.register_handler(progress_handler)
-            
+
             try:
                 # Start the backtest in a background task
                 backtest_task = asyncio.create_task(
                     backtest_service.run_backtest_async(progress_callback=progress_callback)
                 )
-                
+
                 # Start the disconnect detection task
                 disconnect_task = asyncio.create_task(wait_for_disconnect())
-                
+
+                # Track run start in database
+                tracker.mark_started()
+
                 # Send initial message
                 yield StartEvent().to_sse()
 
@@ -275,6 +311,7 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
                     # Check if client disconnected
                     if disconnect_task.done():
                         print("Client disconnected, cancelling backtest execution")
+                        tracker.mark_error("Client disconnected")
                         backtest_task.cancel()
                         try:
                             await backtest_task
@@ -295,27 +332,44 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
                     result = await backtest_task
                 except asyncio.CancelledError:
                     print("Backtest task was cancelled")
+                    tracker.mark_error("Backtest was cancelled")
                     return
 
                 if not result:
-                    yield ErrorEvent(message="Failed to complete backtest").to_sse()
+                    error_msg = "Failed to complete backtest"
+                    tracker.mark_error(error_msg)
+                    yield ErrorEvent(message=error_msg).to_sse()
                     return
 
-                # Send the final result
+                # Build the final data
                 performance_metrics = BacktestPerformanceMetrics(**result["performance_metrics"])
-                final_data = CompleteEvent(
-                    data={
-                        "performance_metrics": performance_metrics.model_dump(),
-                        "final_portfolio": result["final_portfolio"],
-                        "total_days": len(result["results"]),
-                    }
+                final_data_dict = {
+                    "performance_metrics": performance_metrics.model_dump(),
+                    "final_portfolio": result["final_portfolio"],
+                    "total_days": len(result["results"]),
+                }
+
+                # Persist results and final portfolio to database
+                tracker.mark_complete(
+                    results=final_data_dict,
+                    final_portfolio=result["final_portfolio"]
                 )
+
+                # Send the final result
+                final_data = CompleteEvent(data=final_data_dict)
                 yield final_data.to_sse()
 
             except asyncio.CancelledError:
                 print("Backtest event generator cancelled")
+                tracker.mark_error("Backtest event generator cancelled")
                 return
+            except Exception as e:
+                print(f"Unexpected error in backtest event generator: {e}")
+                tracker.mark_error(str(e))
+                yield ErrorEvent(message=str(e)).to_sse()
             finally:
+                # Close tracker DB session
+                tracker.close()
                 # Clean up
                 progress.unregister_handler(progress_handler)
                 if backtest_task and not backtest_task.done():

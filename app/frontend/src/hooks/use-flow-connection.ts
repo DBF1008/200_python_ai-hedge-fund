@@ -115,6 +115,12 @@ export function useFlowConnection(flowId: string | null) {
   const runFlow = useCallback((params: HedgeFundRequest) => {
     if (!flowId || !canRun) return;
 
+    // Inject flow_id into the request for backend persistence
+    const paramsWithFlowId: HedgeFundRequest = {
+      ...params,
+      flow_id: parseInt(flowId, 10),
+    };
+
     // Reset node states for this flow
     nodeContext.resetAllNodes(flowId);
 
@@ -126,7 +132,7 @@ export function useFlowConnection(flowId: string | null) {
 
     try {
       // Start the API call
-      const abortController = api.runHedgeFund(params, nodeContext, flowId);
+      const abortController = api.runHedgeFund(paramsWithFlowId, nodeContext, flowId);
 
       // Update connection with abort controller
       flowConnectionManager.setConnection(flowId, {
@@ -136,7 +142,7 @@ export function useFlowConnection(flowId: string | null) {
 
       // TODO: We should enhance the API to notify us when the connection completes
       // For now, we'll rely on the complete event from the SSE stream
-      
+
     } catch (error) {
       console.error('Failed to start hedge fund run:', error);
       flowConnectionManager.setConnection(flowId, {
@@ -151,6 +157,12 @@ export function useFlowConnection(flowId: string | null) {
   const runBacktest = useCallback((params: BacktestRequest) => {
     if (!flowId || !canRun) return;
 
+    // Inject flow_id into the request for backend persistence
+    const paramsWithFlowId: BacktestRequest = {
+      ...params,
+      flow_id: parseInt(flowId, 10),
+    };
+
     // Reset node states for this flow
     nodeContext.resetAllNodes(flowId);
 
@@ -162,7 +174,7 @@ export function useFlowConnection(flowId: string | null) {
 
     try {
       // Start the backtest API call
-      const abortController = backtestApi.runBacktest(params, nodeContext, flowId);
+      const abortController = backtestApi.runBacktest(paramsWithFlowId, nodeContext, flowId);
 
       // Update connection with abort controller
       flowConnectionManager.setConnection(flowId, {
@@ -172,7 +184,7 @@ export function useFlowConnection(flowId: string | null) {
 
       // TODO: We should enhance the API to notify us when the connection completes
       // For now, we'll rely on the complete event from the SSE stream
-      
+
     } catch (error) {
       console.error('Failed to start backtest:', error);
       flowConnectionManager.setConnection(flowId, {

@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -m py_compile src/utils/progress.py app/backend/services/graph.py app/backend/services/backtest_service.py app/backend/routes/hedge_fund.py)",
+      "Bash(python3:*)"
+    ]
+  }
+}

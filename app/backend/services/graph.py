@@ -9,6 +9,7 @@ from src.agents.portfolio_manager import portfolio_management_agent
 from src.agents.risk_manager import risk_management_agent
 from src.main import start
 from src.utils.analysts import ANALYST_CONFIG
+from src.utils.progress import progress_run_context
 from src.graph.state import AgentState
 
 
@@ -129,12 +130,12 @@ def create_graph(graph_nodes: list, graph_edges: list) -> StateGraph:
     return graph
 
 
-async def run_graph_async(graph, portfolio, tickers, start_date, end_date, model_name, model_provider, request=None):
+async def run_graph_async(graph, portfolio, tickers, start_date, end_date, model_name, model_provider, request=None, run_id=None):
     """Async wrapper for run_graph to work with asyncio."""
     # Use run_in_executor to run the synchronous function in a separate thread
     # so it doesn't block the event loop
     loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(None, lambda: run_graph(graph, portfolio, tickers, start_date, end_date, model_name, model_provider, request))  # Use default executor
+    result = await loop.run_in_executor(None, lambda: run_graph(graph, portfolio, tickers, start_date, end_date, model_name, model_provider, request, run_id))  # Use default executor
     return result
 
 
@@ -147,34 +148,40 @@ def run_graph(
     model_name: str,
     model_provider: str,
     request=None,
+    run_id: str | None = None,
 ) -> dict:
     """
     Run the graph with the given portfolio, tickers,
     start date, end date, show reasoning, model name,
     and model provider.
     """
-    return graph.invoke(
-        {
-            "messages": [
-                HumanMessage(
-                    content="Make trading decisions based on the provided data.",
-                )
-            ],
-            "data": {
-                "tickers": tickers,
-                "portfolio": portfolio,
-                "start_date": start_date,
-                "end_date": end_date,
-                "analyst_signals": {},
+    # Bind this run's id to the current (worker) thread before invoking the graph.
+    # LangGraph runs parallel nodes via a context-copying executor, so the run id
+    # propagates to the agent threads and progress.update_status() routes each
+    # event back to only this run's handlers — keeping concurrent runs isolated.
+    with progress_run_context(run_id):
+        return graph.invoke(
+            {
+                "messages": [
+                    HumanMessage(
+                        content="Make trading decisions based on the provided data.",
+                    )
+                ],
+                "data": {
+                    "tickers": tickers,
+                    "portfolio": portfolio,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "analyst_signals": {},
+                },
+                "metadata": {
+                    "show_reasoning": False,
+                    "model_name": model_name,
+                    "model_provider": model_provider,
+                    "request": request,  # Pass the request for agent-specific model access
+                },
             },
-            "metadata": {
-                "show_reasoning": False,
-                "model_name": model_name,
-                "model_provider": model_provider,
-                "request": request,  # Pass the request for agent-specific model access
-            },
-        },
-    )
+        )
 
 
 def parse_hedge_fund_response(response):

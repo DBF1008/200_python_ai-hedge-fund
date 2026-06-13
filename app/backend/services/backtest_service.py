@@ -32,6 +32,7 @@ class BacktestService:
         model_name: str = "gpt-4.1",
         model_provider: str = "OpenAI",
         request: dict = {},
+        run_id: Optional[str] = None,
     ):
         """
         Initialize the backtest service.
@@ -45,6 +46,7 @@ class BacktestService:
         :param model_name: Which LLM model name to use.
         :param model_provider: Which LLM provider.
         :param request: Request object containing API keys and other metadata.
+        :param run_id: Identifier used to scope agent progress events to this run.
         """
         self.graph = graph
         self.portfolio = portfolio
@@ -55,6 +57,7 @@ class BacktestService:
         self.model_name = model_name
         self.model_provider = model_provider
         self.request = request
+        self.run_id = run_id
         self.portfolio_values = []
 
     def execute_trade(self, ticker: str, action: str, quantity: float, current_price: float) -> int:
@@ -373,6 +376,7 @@ class BacktestService:
                     model_name=self.model_name,
                     model_provider=self.model_provider,
                     request=self.request,
+                    run_id=self.run_id,
                 )
                 
                 # Parse the decisions from the graph result

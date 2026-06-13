@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 import asyncio
+import uuid
 
 from app.backend.database import get_db
 from app.backend.models.schemas import ErrorResponse, HedgeFundRequest, BacktestRequest, BacktestDayResult, BacktestPerformanceMetrics
@@ -61,6 +62,9 @@ async def run(request_data: HedgeFundRequest, request: Request, db: Session = De
 
         # Set up streaming response
         async def event_generator():
+            # Unique id so this run only ever receives its own progress events,
+            # even when other runs execute concurrently.
+            run_id = str(uuid.uuid4())
             # Queue for progress updates
             progress_queue = asyncio.Queue()
             run_task = None
@@ -72,7 +76,7 @@ async def run(request_data: HedgeFundRequest, request: Request, db: Session = De
                 progress_queue.put_nowait(event)
 
             # Register our handler with the progress tracker
-            progress.register_handler(progress_handler)
+            progress.register_handler(progress_handler, run_id=run_id)
 
             try:
                 # Start the graph execution in a background task
@@ -86,6 +90,7 @@ async def run(request_data: HedgeFundRequest, request: Request, db: Session = De
                         model_name=request_data.model_name,
                         model_provider=model_provider,
                         request=request_data,  # Pass the full request for agent-specific model access
+                        run_id=run_id,  # Scope this run's agent progress events
                     )
                 )
                 
@@ -141,7 +146,7 @@ async def run(request_data: HedgeFundRequest, request: Request, db: Session = De
                 return
             finally:
                 # Clean up
-                progress.unregister_handler(progress_handler)
+                progress.unregister_handler(progress_handler, run_id=run_id)
                 if run_task and not run_task.done():
                     run_task.cancel()
                     try:
@@ -192,6 +197,10 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
         graph = create_graph(graph_nodes=request_data.graph_nodes, graph_edges=request_data.graph_edges)
         graph = graph.compile()
 
+        # Unique id so this backtest only ever receives its own progress events,
+        # even when other runs/backtests execute concurrently.
+        run_id = str(uuid.uuid4())
+
         # Create backtest service with the compiled graph
         backtest_service = BacktestService(
             graph=graph,
@@ -203,6 +212,7 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
             model_name=request_data.model_name,
             model_provider=model_provider,
             request=request_data,  # Pass the full request for agent-specific model access
+            run_id=run_id,  # Scope this backtest's agent progress events
         )
 
         # Function to detect client disconnection
@@ -256,7 +266,7 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
                     progress_queue.put_nowait(event)
 
             # Register our handler with the progress tracker to capture agent updates
-            progress.register_handler(progress_handler)
+            progress.register_handler(progress_handler, run_id=run_id)
             
             try:
                 # Start the backtest in a background task
@@ -317,7 +327,7 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
                 return
             finally:
                 # Clean up
-                progress.unregister_handler(progress_handler)
+                progress.unregister_handler(progress_handler, run_id=run_id)
                 if backtest_task and not backtest_task.done():
                     backtest_task.cancel()
                     try:

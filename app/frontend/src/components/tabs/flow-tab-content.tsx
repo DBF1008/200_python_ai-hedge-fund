@@ -3,6 +3,7 @@ import { useFlowContext } from '@/contexts/flow-context';
 import { useTabsContext } from '@/contexts/tabs-context';
 import { setNodeInternalState, setCurrentFlowId as setNodeStateFlowId } from '@/hooks/use-node-state';
 import { cn } from '@/lib/utils';
+import { useFlowRunRestore } from '@/hooks/use-flow-run-restore';
 import { flowService } from '@/services/flow-service';
 import { Flow as FlowType } from '@/types/flow';
 import { useEffect } from 'react';
@@ -17,6 +18,7 @@ interface FlowTabContentProps {
 export function FlowTabContent({ flow, className }: FlowTabContentProps) {
   const { loadFlow } = useFlowContext();
   const { activeTabId } = useTabsContext();
+  const { restoreLatestRun } = useFlowRunRestore();
 
   // Enhanced load function that restores both use-node-state and node context data
   const loadFlowWithCompleteState = async (flowToLoad: FlowType) => {
@@ -68,11 +70,16 @@ export function FlowTabContent({ flow, className }: FlowTabContentProps) {
           // Fallback to loading the cached flow data with complete state restoration
           await loadFlowWithCompleteState(flow);
         }
+
+        // After loading, restore the most recent persisted run's output and status
+        // from the backend. No-op for unsaved flows, flows with a live run this
+        // session, or when in-session output already exists.
+        await restoreLatestRun(flow.id.toString());
       };
 
       fetchAndLoadFlow();
     }
-  }, [activeTabId, flow.id, flow, loadFlow]);
+  }, [activeTabId, flow.id, flow, loadFlow, restoreLatestRun]);
 
   return (
     <div className={cn("h-full w-full", className)}>

@@ -43,6 +43,9 @@ export interface BaseHedgeFundRequest {
   model_provider?: ModelProvider;
   margin_requirement?: number;
   portfolio_positions?: PortfolioPosition[];
+  // DB id of the saved flow this run belongs to. When present, the backend
+  // persists a FlowRun record for execution history. Omitted for unsaved flows.
+  flow_id?: number;
 }
 
 export interface HedgeFundRequest extends BaseHedgeFundRequest {

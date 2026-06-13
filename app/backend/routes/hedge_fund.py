@@ -10,6 +10,7 @@ from app.backend.services.graph import create_graph, parse_hedge_fund_response, 
 from app.backend.services.portfolio import create_portfolio
 from app.backend.services.backtest_service import BacktestService
 from app.backend.services.api_key_service import ApiKeyService
+from app.backend.services.flow_run_service import FlowRunService
 from src.utils.progress import progress
 from src.utils.analysts import get_agents_list
 
@@ -66,6 +67,11 @@ async def run(request_data: HedgeFundRequest, request: Request, db: Session = De
             run_task = None
             disconnect_task = None
 
+            # Tracks the persisted FlowRun for saved flows (None for unsaved flows)
+            flow_run_service = FlowRunService()
+            flow_run_id = None
+            run_finalized = False
+
             # Simple handler to add updates to the queue
             def progress_handler(agent_name, ticker, status, analysis, timestamp):
                 event = ProgressUpdateEvent(agent=agent_name, ticker=ticker, status=status, timestamp=timestamp, analysis=analysis)
@@ -94,6 +100,12 @@ async def run(request_data: HedgeFundRequest, request: Request, db: Session = De
                 
                 # Send initial message
                 yield StartEvent().to_sse()
+
+                # Create a FlowRun record for saved flows so execution history is tracked.
+                flow_run_id = flow_run_service.start(
+                    request_data.flow_id,
+                    {**request_data.model_dump(exclude={"api_keys"}), "run_type": "single"},
+                )
 
                 # Stream progress updates until run_task completes or client disconnects
                 while not run_task.done():
@@ -124,22 +136,33 @@ async def run(request_data: HedgeFundRequest, request: Request, db: Session = De
 
                 if not result or not result.get("messages"):
                     yield ErrorEvent(message="Failed to generate hedge fund decisions").to_sse()
+                    flow_run_service.error(flow_run_id, "Failed to generate hedge fund decisions")
+                    run_finalized = True
                     return
 
                 # Send the final result
-                final_data = CompleteEvent(
-                    data={
-                        "decisions": parse_hedge_fund_response(result.get("messages", [])[-1].content),
-                        "analyst_signals": result.get("data", {}).get("analyst_signals", {}),
-                        "current_prices": result.get("data", {}).get("current_prices", {}),
-                    }
-                )
+                final_payload = {
+                    "decisions": parse_hedge_fund_response(result.get("messages", [])[-1].content),
+                    "analyst_signals": result.get("data", {}).get("analyst_signals", {}),
+                    "current_prices": result.get("data", {}).get("current_prices", {}),
+                }
+                final_data = CompleteEvent(data=final_payload)
                 yield final_data.to_sse()
+
+                # Persist the completed run results for restoration after refresh.
+                flow_run_service.complete(flow_run_id, final_payload)
+                run_finalized = True
 
             except asyncio.CancelledError:
                 print("Event generator cancelled")
                 return
             finally:
+                # If the run never reached a terminal state (client disconnect,
+                # manual stop, or unexpected failure), record it as such.
+                if not run_finalized:
+                    flow_run_service.error(flow_run_id, "Run did not complete (interrupted or failed)")
+                flow_run_service.close()
+
                 # Clean up
                 progress.unregister_handler(progress_handler)
                 if run_task and not run_task.done():
@@ -222,6 +245,11 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
             backtest_task = None
             disconnect_task = None
 
+            # Tracks the persisted FlowRun for saved flows (None for unsaved flows)
+            flow_run_service = FlowRunService()
+            flow_run_id = None
+            run_finalized = False
+
             # Global progress handler to capture individual agent updates during backtest
             def progress_handler(agent_name, ticker, status, analysis, timestamp):
                 event = ProgressUpdateEvent(agent=agent_name, ticker=ticker, status=status, timestamp=timestamp, analysis=analysis)
@@ -270,6 +298,12 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
                 # Send initial message
                 yield StartEvent().to_sse()
 
+                # Create a FlowRun record for saved flows so execution history is tracked.
+                flow_run_id = flow_run_service.start(
+                    request_data.flow_id,
+                    {**request_data.model_dump(exclude={"api_keys"}), "run_type": "backtest"},
+                )
+
                 # Stream progress updates until backtest_task completes or client disconnects
                 while not backtest_task.done():
                     # Check if client disconnected
@@ -299,23 +333,34 @@ async def backtest(request_data: BacktestRequest, request: Request, db: Session 
 
                 if not result:
                     yield ErrorEvent(message="Failed to complete backtest").to_sse()
+                    flow_run_service.error(flow_run_id, "Failed to complete backtest")
+                    run_finalized = True
                     return
 
                 # Send the final result
                 performance_metrics = BacktestPerformanceMetrics(**result["performance_metrics"])
-                final_data = CompleteEvent(
-                    data={
-                        "performance_metrics": performance_metrics.model_dump(),
-                        "final_portfolio": result["final_portfolio"],
-                        "total_days": len(result["results"]),
-                    }
-                )
+                final_payload = {
+                    "performance_metrics": performance_metrics.model_dump(),
+                    "final_portfolio": result["final_portfolio"],
+                    "total_days": len(result["results"]),
+                }
+                final_data = CompleteEvent(data=final_payload)
                 yield final_data.to_sse()
+
+                # Persist the completed backtest results for restoration after refresh.
+                flow_run_service.complete(flow_run_id, final_payload)
+                run_finalized = True
 
             except asyncio.CancelledError:
                 print("Backtest event generator cancelled")
                 return
             finally:
+                # If the run never reached a terminal state (client disconnect,
+                # manual stop, or unexpected failure), record it as such.
+                if not run_finalized:
+                    flow_run_service.error(flow_run_id, "Run did not complete (interrupted or failed)")
+                flow_run_service.close()
+
                 # Clean up
                 progress.unregister_handler(progress_handler)
                 if backtest_task and not backtest_task.done():

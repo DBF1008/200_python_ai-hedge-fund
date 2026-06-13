@@ -125,8 +125,11 @@ export function useFlowConnection(flowId: string | null) {
     });
 
     try {
+      // Inject the DB flow id so the backend can persist run history for saved flows.
+      const paramsWithFlow = { ...params, flow_id: flowId ? parseInt(flowId, 10) : undefined };
+
       // Start the API call
-      const abortController = api.runHedgeFund(params, nodeContext, flowId);
+      const abortController = api.runHedgeFund(paramsWithFlow, nodeContext, flowId);
 
       // Update connection with abort controller
       flowConnectionManager.setConnection(flowId, {
@@ -161,8 +164,11 @@ export function useFlowConnection(flowId: string | null) {
     });
 
     try {
+      // Inject the DB flow id so the backend can persist run history for saved flows.
+      const paramsWithFlow = { ...params, flow_id: flowId ? parseInt(flowId, 10) : undefined };
+
       // Start the backtest API call
-      const abortController = backtestApi.runBacktest(params, nodeContext, flowId);
+      const abortController = backtestApi.runBacktest(paramsWithFlow, nodeContext, flowId);
 
       // Update connection with abort controller
       flowConnectionManager.setConnection(flowId, {

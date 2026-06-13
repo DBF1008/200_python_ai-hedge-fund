@@ -68,6 +68,9 @@ class BaseHedgeFundRequest(BaseModel):
     margin_requirement: float = 0.0
     portfolio_positions: Optional[List[PortfolioPosition]] = None
     api_keys: Optional[Dict[str, str]] = None
+    # DB id of the saved flow this run belongs to. When present, the run/backtest
+    # endpoints persist a FlowRun record for execution history. None for unsaved flows.
+    flow_id: Optional[int] = None
 
     def get_agent_ids(self) -> List[str]:
         """Extract agent IDs from graph structure"""

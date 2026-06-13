@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c \"import app.backend.routes.hedge_fund; import app.backend.services.flow_run_service; print\\(''''IMPORT_OK''''\\)\")"
+    ]
+  }
+}
